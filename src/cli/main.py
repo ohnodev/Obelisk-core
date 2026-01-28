@@ -177,13 +177,11 @@ def chat(mode):
                 # Normal memory save - quick operation
                 status_msg = "[bold cyan]◊[/bold cyan] [bold]Processing memory...[/bold]"
             
-            # Use console.status with spinner - writes directly to terminal
-            # Show status message immediately before starting operation
+            # Use console.status with spinner - same approach as thinking spinner
+            # Simple approach: no redirection, works the same in both debug and non-debug mode
+            # The spinner will animate properly since we're not redirecting stderr
             console.print()  # Add blank line for spacing
-            
-            # Use status context manager - ensure it displays immediately
-            # The spinner should show during the entire operation
-            with console.status(status_msg, spinner="dots", refresh_per_second=10):
+            with console.status(status_msg, spinner="dots"):
                 memory_manager.add_interaction(
                     user_id=user_id,
                     query=query,
@@ -193,7 +191,6 @@ def chat(mode):
                     quantum_seed=0.7,
                     reward_score=0.0
                 )
-            
             console.print()  # Add blank line after operation completes
             
         except KeyboardInterrupt:
