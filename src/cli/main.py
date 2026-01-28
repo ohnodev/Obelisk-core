@@ -89,28 +89,15 @@ def chat(mode):
     ))
     
     # Loading message
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
-    
     with console.status("[bold cyan]Awakening The Overseer...", spinner="dots"):
-        # Suppress initialization messages only if debug mode is off
-        if Config.DEBUG:
-            storage = Config.get_storage()
-            llm = ObeliskLLM(storage=storage)
-            memory_manager = ObeliskMemoryManager(
-                storage=storage,
-                llm=llm,
-                mode=Config.MODE
-            )
-        else:
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                storage = Config.get_storage()
-                llm = ObeliskLLM(storage=storage)
-                memory_manager = ObeliskMemoryManager(
-                    storage=storage,
-                    llm=llm,
-                    mode=Config.MODE
-                )
+        # Simple approach: no redirection, works the same in both debug and non-debug mode
+        storage = Config.get_storage()
+        llm = ObeliskLLM(storage=storage)
+        memory_manager = ObeliskMemoryManager(
+            storage=storage,
+            llm=llm,
+            mode=Config.MODE
+        )
     
     console.print("[bold green]✓[/bold green] [dim]The Overseer is ready[/dim]")
     console.print()
@@ -152,27 +139,14 @@ def chat(mode):
             # Use console.status() with proper formatting - it handles animation automatically
             status_text = "[bold cyan]◊[/bold cyan] [bold]The Overseer is thinking...[/bold]"
             
-            # console.status() writes to stderr, so we must NOT redirect stderr
-            # Only redirect stdout to suppress LLM debug messages (most are on stdout)
-            # Only suppress output if debug mode is off
-            if Config.DEBUG:
-                with console.status(status_text, spinner="dots"):
-                    result = llm.generate(
-                        query=query,
-                        quantum_influence=0.7,
-                        conversation_context=context
-                    )
-            else:
-                # Redirect only stdout to suppress LLM debug messages
-                # Keep stderr open so console.status() can write the animated spinner to it
-                with console.status(status_text, spinner="dots"):
-                    with redirect_stdout(io.StringIO()):
-                        # Don't redirect stderr - Rich needs it for the spinner animation
-                        result = llm.generate(
-                            query=query,
-                            quantum_influence=0.7,
-                            conversation_context=context
-                        )
+            # Simple approach: no redirection, works the same in both debug and non-debug mode
+            # The spinner will animate properly since we're not redirecting stderr
+            with console.status(status_text, spinner="dots"):
+                result = llm.generate(
+                    query=query,
+                    quantum_influence=0.7,
+                    conversation_context=context
+                )
             
             response = result.get('response', 'The Overseer processes your query.')
             
