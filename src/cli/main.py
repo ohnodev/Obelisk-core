@@ -152,7 +152,8 @@ def chat(mode):
             # Use console.status() with proper formatting - it handles animation automatically
             status_text = "[bold cyan]◊[/bold cyan] [bold]The Overseer is thinking...[/bold]"
             
-            # console.status() writes directly to terminal and animates the spinner
+            # console.status() writes to stderr, so we must NOT redirect stderr
+            # Only redirect stdout to suppress LLM debug messages (most are on stdout)
             # Only suppress output if debug mode is off
             if Config.DEBUG:
                 with console.status(status_text, spinner="dots"):
@@ -162,10 +163,11 @@ def chat(mode):
                         conversation_context=context
                     )
             else:
-                # Redirect stdout/stderr to suppress LLM debug messages
-                # console.status writes directly to terminal via stderr, so it won't be affected
+                # Redirect only stdout to suppress LLM debug messages
+                # Keep stderr open so console.status() can write the animated spinner to it
                 with console.status(status_text, spinner="dots"):
-                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    with redirect_stdout(io.StringIO()):
+                        # Don't redirect stderr - Rich needs it for the spinner animation
                         result = llm.generate(
                             query=query,
                             quantum_influence=0.7,
