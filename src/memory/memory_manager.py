@@ -3,6 +3,7 @@ Memory Manager for The Obelisk
 Uses LangChain for conversation memory management with Qwen LLM for summarization
 """
 from typing import List, Dict, Any, Optional
+from pathlib import Path
 import os
 import json
 import re
@@ -313,7 +314,6 @@ JSON only:"""
         try:
             # Summaries are stored as activity logs with type 'conversation_summary'
             # We need to get the most recent summary for this user
-            from pathlib import Path
             
             # For LocalJSONStorage, summaries are in activities.json
             if hasattr(self.storage, 'base_path'):
