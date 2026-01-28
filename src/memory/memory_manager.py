@@ -201,14 +201,18 @@ Return JSON with these exact keys:
 
 JSON only:"""
             
-            # Generate summary - no output redirection needed
-            # The CLI spinner will handle user feedback, and any LLM output will appear naturally
-            result = self.llm.generate(
-                query=summary_prompt,
-                quantum_influence=0.2,  # Lower influence for more consistent summaries
-                conversation_context=None,
-                max_length=500  # Allow more tokens for JSON generation
-            )
+            # Generate summary - suppress stdout (LLM debug messages) but keep stderr free for spinner
+            # The CLI spinner uses stderr, so we only redirect stdout to prevent interference
+            from io import StringIO
+            from contextlib import redirect_stdout
+            
+            with redirect_stdout(StringIO()):
+                result = self.llm.generate(
+                    query=summary_prompt,
+                    quantum_influence=0.2,  # Lower influence for more consistent summaries
+                    conversation_context=None,
+                    max_length=500  # Allow more tokens for JSON generation
+                )
             
             summary_text = result.get('response', '').strip()
             
