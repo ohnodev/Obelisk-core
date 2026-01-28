@@ -23,6 +23,7 @@ pydantic>=2.0.0
 # LangChain is essential for memory management - the system will fail to start without it
 langchain>=1.0.0
 langchain-core>=1.0.0
+langchain-qwq>=0.1.0  # LangChain Qwen integration for structured output in memory summarization
 
 # Storage (Supabase for prod mode)
 supabase>=1.0.0
