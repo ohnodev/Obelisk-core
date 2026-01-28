@@ -183,23 +183,16 @@ def chat(mode):
             
             # Use status context manager - ensure it displays immediately
             # The spinner should show during the entire operation
-            try:
-                with console.status(status_msg, spinner="dots", refresh_per_second=10):
-                    # Flush console to ensure spinner starts immediately
-                    console._check_stream()
-                    memory_manager.add_interaction(
-                        user_id=user_id,
-                        query=query,
-                        response=response,
-                        cycle_id=None,
-                        energy=0.0,
-                        quantum_seed=0.7,
-                        reward_score=0.0
-                    )
-            except Exception as e:
-                # If there's an error, make sure we exit the status context
-                console.print(f"[bold red]Error during memory processing:[/bold red] {e}")
-                raise
+            with console.status(status_msg, spinner="dots", refresh_per_second=10):
+                memory_manager.add_interaction(
+                    user_id=user_id,
+                    query=query,
+                    response=response,
+                    cycle_id=None,
+                    energy=0.0,
+                    quantum_seed=0.7,
+                    reward_score=0.0
+                )
             
             console.print()  # Add blank line after operation completes
             
