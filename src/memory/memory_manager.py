@@ -5,6 +5,7 @@ Uses LangChain for conversation memory management with Qwen LLM for summarizatio
 from typing import List, Dict, Any, Optional
 import os
 import json
+import re
 from ..storage.base import StorageInterface
 
 # LangChain is REQUIRED - no fallback
@@ -213,7 +214,6 @@ JSON only:"""
             
             # Remove thinking content if present (ObeliskLLM should extract it, but be defensive)
             # Qwen3 format: <think>...</think>
-            import re
             summary_text = re.sub(r'<think>.*?</think>', '', summary_text, flags=re.DOTALL | re.IGNORECASE)
             summary_text = summary_text.strip()
             
