@@ -211,8 +211,13 @@ JSON only:"""
             
             summary_text = result.get('response', '').strip()
             
-            # Extract JSON - try multiple strategies
+            # Remove thinking content if present (ObeliskLLM should extract it, but be defensive)
+            # Qwen3 format: <think>...</think>
             import re
+            summary_text = re.sub(r'<think>.*?</think>', '', summary_text, flags=re.DOTALL | re.IGNORECASE)
+            summary_text = summary_text.strip()
+            
+            # Extract JSON - try multiple strategies
             
             # Strategy 1: Find complete JSON object by matching braces
             json_start = summary_text.find('{')
