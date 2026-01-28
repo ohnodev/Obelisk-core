@@ -21,9 +21,9 @@ pydantic>=2.0.0
 
 # Memory management (REQUIRED - no fallback)
 # LangChain is essential for memory management - the system will fail to start without it
+# LangChain is open source and works with local models - no API calls needed
 langchain>=1.0.0
 langchain-core>=1.0.0
-langchain-qwq>=0.1.0  # LangChain Qwen integration for structured output in memory summarization
 
 # Storage (Supabase for prod mode)
 supabase>=1.0.0
