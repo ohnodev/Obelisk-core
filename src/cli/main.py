@@ -178,11 +178,15 @@ def chat(mode):
                 status_msg = "[bold cyan]◊[/bold cyan] [bold]Processing memory...[/bold]"
             
             # Use console.status with spinner - writes directly to terminal
-            # Force console to show status immediately
+            # Show status message immediately before starting operation
             console.print()  # Add blank line for spacing
-            # Use status context manager - it should show spinner immediately
-            with console.status(status_msg, spinner="dots", refresh_per_second=10):
-                try:
+            
+            # Use status context manager - ensure it displays immediately
+            # The spinner should show during the entire operation
+            try:
+                with console.status(status_msg, spinner="dots", refresh_per_second=10):
+                    # Flush console to ensure spinner starts immediately
+                    console._check_stream()
                     memory_manager.add_interaction(
                         user_id=user_id,
                         query=query,
@@ -192,10 +196,11 @@ def chat(mode):
                         quantum_seed=0.7,
                         reward_score=0.0
                     )
-                except Exception as e:
-                    # If there's an error, make sure we exit the status context
-                    console.print(f"[bold red]Error during memory processing:[/bold red] {e}")
-                    raise
+            except Exception as e:
+                # If there's an error, make sure we exit the status context
+                console.print(f"[bold red]Error during memory processing:[/bold red] {e}")
+                raise
+            
             console.print()  # Add blank line after operation completes
             
         except KeyboardInterrupt:
