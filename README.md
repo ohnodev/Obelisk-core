@@ -15,6 +15,12 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.8+-blue?style=for-the-badge&logo=python" alt="Python"></a>
 </p>
 
+<p align="center">
+  <a href="https://theobelisk.ai">🌐 Website</a> ·
+  <a href="https://x.com/theobeliskai">𝕏 X (Twitter)</a> ·
+  <a href="https://t.me/theobeliskportal">💬 Telegram</a>
+</p>
+
 **Obelisk Core** is a Python framework for building AI agents with a self-hosted LLM and memory layer. Start with the basics and extend with modules as needed.
 
 **Status**: 🟢 Alpha - v0.1.0-alpha
