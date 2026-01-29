@@ -299,14 +299,14 @@ JSON only:"""
         buffer.add_user_message(query)
         buffer.add_ai_message(response)
         
-        # Check if we need to summarize (every N message pairs)
-        # Count message pairs from storage (not buffer, since buffer is just a window)
+        # Check if we need to summarize (every N interactions)
+        # Each interaction is already a pair (query + response)
         interactions = self.storage.get_user_interactions(user_id, limit=self.summarize_threshold * 2)
-        message_pairs = len(interactions) // 2
+        interaction_count = len(interactions)
         
         # Trigger summarization when we hit the threshold (every N interactions)
-        # Only summarize when we have exactly N pairs (not on every interaction after N)
-        if message_pairs > 0 and message_pairs % self.summarize_threshold == 0:
+        # Only summarize when we have exactly N interactions (not on every interaction after N)
+        if interaction_count > 0 and interaction_count % self.summarize_threshold == 0:
             # Get only the recent interactions to summarize (last N pairs)
             recent_interactions = self.storage.get_user_interactions(user_id, limit=self.summarize_threshold)
             
