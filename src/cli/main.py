@@ -175,9 +175,9 @@ def chat(mode):
             # Add to memory (handles storage internally)
             # Check if summarization will occur (every 3 interactions)
             # Only show spinner when summarization happens, otherwise save silently
-            memory = memory_manager.get_memory(user_id)
-            all_messages = memory.get_all_messages()
-            message_pairs = len(all_messages) // 2
+            # Check from storage (not buffer, since buffer is just a window)
+            interactions = memory_manager.storage.get_user_interactions(user_id, limit=memory_manager.summarize_threshold * 2)
+            message_pairs = len(interactions) // 2
             
             # Check if this interaction will trigger summarization
             will_summarize = (message_pairs + 1) > 0 and (message_pairs + 1) % memory_manager.summarize_threshold == 0
