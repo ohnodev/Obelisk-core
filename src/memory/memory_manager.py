@@ -503,18 +503,22 @@ Return ONLY valid JSON with this exact format:
 
 Return the indices (0-based) of the {top_k} most relevant memories. JSON only:"""
             
-            # Use LLM to select (low temperature for consistency)
+            # Use LLM to select (low temperature, no thinking mode for speed and simplicity)
             result = self.llm.generate(
                 query=selection_prompt,
                 quantum_influence=0.1,  # Very low influence for consistent selection
                 conversation_context=None,
-                max_length=200  # Short response for selection
+                max_length=800,  # Enough for JSON response
+                enable_thinking=False  # Disable thinking mode for faster, simpler selection
             )
             
             selection_text = result.get('response', '').strip()
             
-            # Remove thinking content if present (Qwen3 format)
+            # Remove thinking content if present (Qwen3 format) - handle truncated cases
+            # First try to remove complete thinking blocks
             selection_text = re.sub(r'<think>.*?</think>', '', selection_text, flags=re.DOTALL | re.IGNORECASE)
+            # Also remove incomplete thinking blocks (if truncated)
+            selection_text = re.sub(r'<think>.*$', '', selection_text, flags=re.DOTALL | re.IGNORECASE)
             selection_text = selection_text.strip()
             
             # Strip markdown code blocks
