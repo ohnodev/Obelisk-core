@@ -51,11 +51,15 @@ ENV/
 data/
 
 # Local data directories (created in repo root during development/testing)
+# Memory-related files (new structure)
+memory/
+# Old structure (kept for backward compatibility during migration)
 interactions/
+activities.json
+# Other data directories
 users/
 cycles/
 weights/
-activities.json
 
 # User data files - conversations, memory, preferences
 *.json
