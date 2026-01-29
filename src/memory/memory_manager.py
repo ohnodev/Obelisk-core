@@ -336,10 +336,7 @@ JSON only:"""
         if not summaries:
             return []
         
-        # LLM is required for memory selection (enforced in __init__ for solo mode)
-        if not self.llm:
-            raise ValueError("LLM is required for memory selection but was not provided")
-        
+        # LLM is guaranteed to exist (enforced in __init__ for solo mode)
         if len(summaries) <= top_k:
             # If we have fewer summaries than top_k, return all
             return summaries
@@ -385,13 +382,7 @@ Return the indices (0-based) of the {top_k} most relevant memories. JSON only:""
             selection_text = result.get('response', '').strip()
             
             # Extract JSON using utility (raises ValueError if parsing fails - critical error)
-            try:
-                selection_data = extract_json_from_llm_response(selection_text, context="memory selection")
-            except ValueError as e:
-                logger.error(f"Critical error: Failed to parse JSON from memory selection: {e}")
-                # Return most recent as fallback (but log as error)
-                logger.warning("Memory selection failed, using most recent summaries")
-                return summaries[:top_k]
+            selection_data = extract_json_from_llm_response(selection_text, context="memory selection")
             
             # Extract and validate indices
             selected_indices = selection_data.get('selected_indices', [])
@@ -407,14 +398,16 @@ Return the indices (0-based) of the {top_k} most relevant memories. JSON only:""
                 logger.debug(f"Selected {len(selected_memories)} relevant memories from {len(summaries)} total")
                 return selected_memories
             else:
-                logger.warning(f"Memory selection returned invalid indices: {selected_indices} (valid range: 0-{len(summaries)-1})")
-                # Return most recent as fallback
-                return summaries[:top_k]
+                # Critical error: LLM returned invalid indices - this should never happen
+                raise ValueError(
+                    f"Memory selection returned invalid indices: {selected_indices} "
+                    f"(valid range: 0-{len(summaries)-1}). This is a critical error."
+                )
             
         except Exception as e:
-            logger.error(f"Error selecting relevant memories: {e}")
-            # Fallback: return most recent
-            return summaries[:top_k]
+            # Critical error: Memory selection failed - this should never happen
+            logger.error(f"Critical error selecting relevant memories: {e}")
+            raise RuntimeError(f"Memory selection failed: {e}") from e
     
     def get_conversation_context(self, user_id: str, user_query: str) -> Dict[str, Any]:
         """
