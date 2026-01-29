@@ -455,16 +455,20 @@ JSON only:"""
         Use LLM to select relevant memories from a list of summaries
         
         Args:
-            user_query: Current user query
+            user_query: Current user query (required)
             summaries: List of summary dictionaries
             top_k: Number of relevant memories to select (default: 5)
             
         Returns:
             List of selected relevant summary dictionaries
         """
-        if not summaries or not self.llm:
-            # If no LLM or no summaries, return empty or most recent
-            return summaries[:top_k] if summaries else []
+        if not summaries:
+            return []
+        
+        if not self.llm:
+            # If no LLM, return most recent
+            logger.warning("No LLM available for memory selection, using most recent summaries")
+            return summaries[:top_k]
         
         if len(summaries) <= top_k:
             # If we have fewer summaries than top_k, return all
@@ -549,13 +553,13 @@ Return the indices (0-based) of the {top_k} most relevant memories. JSON only:""
             # Fallback: return most recent
             return summaries[:top_k]
     
-    def get_conversation_context(self, user_id: str, user_query: Optional[str] = None) -> Dict[str, Any]:
+    def get_conversation_context(self, user_id: str, user_query: str) -> Dict[str, Any]:
         """
         Get conversation context in Qwen3-compatible format with intelligent memory selection
         
         Args:
             user_id: User identifier
-            user_query: Current user query (optional, used for memory selection)
+            user_query: Current user query (required for memory selection)
         
         Returns:
             Dict with:
@@ -585,16 +589,16 @@ Return the indices (0-based) of the {top_k} most relevant memories. JSON only:""
                             "content": msg.content
                         })
         
-        # Load all summaries and use intelligent selection
+        # Load all summaries and use intelligent selection (always runs)
         all_summaries = self._load_all_summaries_from_storage(user_id, limit=30)
         
         if all_summaries:
-            # Use LLM to select relevant memories if we have a query
-            if user_query and len(all_summaries) > 1:
+            # Always use LLM to select relevant memories based on query
+            if len(all_summaries) > 1:
                 selected_summaries = self._select_relevant_memories(user_query, all_summaries, top_k=5)
             else:
-                # No query or only one summary, use most recent
-                selected_summaries = all_summaries[:5]
+                # Only one summary, use it
+                selected_summaries = all_summaries
             
             # Format selected memories
             for summary_data in selected_summaries:
