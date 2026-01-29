@@ -514,14 +514,7 @@ Return the indices (0-based) of the {top_k} most relevant memories. JSON only:""
             
             selection_text = result.get('response', '').strip()
             
-            # Remove thinking content if present (Qwen3 format) - handle truncated cases
-            # First try to remove complete thinking blocks
-            selection_text = re.sub(r'<think>.*?</think>', '', selection_text, flags=re.DOTALL | re.IGNORECASE)
-            # Also remove incomplete thinking blocks (if truncated)
-            selection_text = re.sub(r'<think>.*$', '', selection_text, flags=re.DOTALL | re.IGNORECASE)
-            selection_text = selection_text.strip()
-            
-            # Strip markdown code blocks
+            # Strip markdown code blocks (thinking mode is disabled, so no thinking content to remove)
             selection_text = re.sub(r'^```(?:json)?\s*\n?', '', selection_text, flags=re.MULTILINE | re.IGNORECASE)
             selection_text = re.sub(r'\n?```\s*$', '', selection_text, flags=re.MULTILINE | re.IGNORECASE)
             selection_text = selection_text.strip()
