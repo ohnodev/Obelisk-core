@@ -2,7 +2,7 @@
 API routes for Obelisk Core
 """
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 import importlib.util
@@ -24,6 +24,33 @@ spec.loader.exec_module(config_module)
 Config = config_module.Config
 
 router = APIRouter()
+
+
+# Request/Response models
+class ConversationMessage(BaseModel):
+    """A single message in conversation history"""
+    role: str = Field(..., description="Message role: 'user' or 'assistant'")
+    content: str = Field(..., description="Message content")
+
+
+class ConversationContext(BaseModel):
+    """Conversation context with messages and memories"""
+    messages: List[ConversationMessage] = Field(
+        default_factory=list,
+        description="List of conversation messages (Qwen3 format)"
+    )
+    memories: str = Field(
+        default="",
+        description="Selected memory summaries for system message"
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict format expected by ObeliskLLM.generate()"""
+        return {
+            "messages": [{"role": msg.role, "content": msg.content} for msg in self.messages],
+            "memories": self.memories
+        }
+
 
 # Global instances (initialized on first request)
 _storage = None
@@ -72,12 +99,23 @@ def get_memory_manager():
     return _memory_manager
 
 
-# Request/Response models
 class GenerateRequest(BaseModel):
-    prompt: str
-    quantum_influence: float = 0.7
-    conversation_context: Optional[Dict[str, Any]] = None
-    user_id: Optional[str] = None
+    """Request model for LLM generation"""
+    prompt: str = Field(..., description="User's query/prompt")
+    quantum_influence: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=0.1,
+        description="Quantum influence value (0.0-0.1)"
+    )
+    conversation_context: Optional[ConversationContext] = Field(
+        default=None,
+        description="Conversation context with messages and memories"
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="User identifier for memory management"
+    )
 
 class GenerateResponse(BaseModel):
     response: str
@@ -112,12 +150,18 @@ async def generate(request: GenerateRequest):
         # Get conversation context if user_id provided (always runs memory selection)
         conversation_context = request.conversation_context
         if request.user_id and not conversation_context:
-            conversation_context = memory_manager.get_conversation_context(request.user_id, user_query=request.prompt)
+            # Get context from memory manager (returns dict format)
+            context_dict = memory_manager.get_conversation_context(request.user_id, user_query=request.prompt)
+            # Convert to ConversationContext model for validation
+            conversation_context = ConversationContext(**context_dict) if context_dict else None
+        
+        # Convert ConversationContext to dict format expected by ObeliskLLM.generate()
+        context_dict = conversation_context.to_dict() if conversation_context else None
         
         result = llm.generate(
             query=request.prompt,
             quantum_influence=request.quantum_influence,
-            conversation_context=conversation_context
+            conversation_context=context_dict
         )
         
         # Add to memory if user_id provided (handles storage internally - Option C)
