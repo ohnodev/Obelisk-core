@@ -266,13 +266,23 @@ def process_evolution_cycle(
                         }
                     )
                     
-                    model_training_result = {
-                        'success': True,
-                        'weight_id': weight_id,
-                        'training_loss': training_result.get('training_loss'),
-                        'examples_trained': len(training_data)
-                    }
-                    logger.info("Model fine-tuning completed and weights saved")
+                    # Check if weight persistence failed
+                    if weight_id is None:
+                        model_training_result = {
+                            'success': False,
+                            'error': 'Failed to save trained weights',
+                            'training_loss': training_result.get('training_loss'),
+                            'examples_trained': len(training_data)
+                        }
+                        logger.error("Model fine-tuning completed but weights failed to save")
+                    else:
+                        model_training_result = {
+                            'success': True,
+                            'weight_id': weight_id,
+                            'training_loss': training_result.get('training_loss'),
+                            'examples_trained': len(training_data)
+                        }
+                        logger.info("Model fine-tuning completed and weights saved")
                     
                     # Create activity log entry for model evolution
                     try:

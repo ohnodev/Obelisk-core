@@ -12,6 +12,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model
 from ..evolution.training import LoRAManager
+from .thinking_token_utils import split_thinking_tokens
 import warnings
 import importlib.util
 
@@ -172,6 +173,7 @@ class ObeliskLLM:
             return int(memory_mb)
         except:
             return 400  # Default estimate
+
 
     def get_system_prompt(self) -> str:
         """Get The Overseer system prompt - loaded from config"""
@@ -364,31 +366,19 @@ class ObeliskLLM:
             generated_tokens = outputs[0][input_length:].tolist()
             
             # Parse thinking content from Qwen3 format (token 151668 = </think>)
-            # Per Qwen3 docs: use rindex to find the last occurrence of token 151668
-            thinking_content = ""
-            final_content = ""
+            thinking_tokens, content_tokens = split_thinking_tokens(generated_tokens)
             
-            try:
-                # Token 151668 is the closing tag for thinking content (</think>)
-                # Per Qwen3 docs: use rindex to find the last occurrence of token 151668
-                end_token = 151668
-                if end_token in generated_tokens:
-                    # Correct reverse index calculation (fixes off-by-one error)
-                    # Find the last occurrence of the end token
-                    last = len(generated_tokens) - 1 - generated_tokens[::-1].index(end_token)
-                    thinking_tokens = generated_tokens[:last]       # before </think>
-                    content_tokens = generated_tokens[last + 1:]   # after </think>
-                    
-                    thinking_content = self.tokenizer.decode(thinking_tokens, skip_special_tokens=True).strip("\n")
-                    final_content = self.tokenizer.decode(content_tokens, skip_special_tokens=True).strip("\n")
-                else:
-                    # No thinking block found, decode everything as content
-                    final_content = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip("\n")
-                    logger.debug("No thinking token (151668) found in output")
-            except ValueError:
-                # Token not found, decode everything
-                final_content = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip("\n")
-                logger.debug("Error finding thinking token, using full output")
+            if thinking_tokens:
+                thinking_content = self.tokenizer.decode(thinking_tokens, skip_special_tokens=True).strip("\n")
+            else:
+                thinking_content = ""
+                logger.debug("No thinking token (151668) found in output")
+            
+            if content_tokens:
+                final_content = self.tokenizer.decode(content_tokens, skip_special_tokens=True).strip("\n")
+            else:
+                final_content = ""
+                logger.debug("No content tokens after thinking block")
             
             raw_response = final_content
             
