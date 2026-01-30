@@ -376,42 +376,11 @@ class ObeliskLLM:
                 conversation_history = cleaned_history
             
             # Build system message (system prompt + memories)
+            # Note: conversation_history is already properly sized by RecentConversationBuffer
+            # (keeps last k message pairs), so no need for additional truncation here
             system_content = system_prompt
-            memories_tokens = 0
             if memories_text:
                 system_content = f"{system_prompt}\n\n{memories_text}"
-                memories_tokens = len(self.tokenizer.encode(memories_text, add_special_tokens=False))
-            
-            # Calculate token limits for conversation history
-            # Reserve: system + memories + query + output + buffer
-            system_content_tokens = len(self.tokenizer.encode(system_content, add_special_tokens=False))
-            available_for_history = self.MAX_CONTEXT_TOKENS - system_content_tokens - len(query_tokens) - self.MAX_OUTPUT_TOKENS - 50
-            max_history_tokens = min(self.MAX_CONVERSATION_CONTEXT_TOKENS, available_for_history)
-            
-            # Truncate conversation history if needed (keep most recent messages)
-            original_history_count = len(conversation_history)
-            if conversation_history and max_history_tokens > 0:
-                # Estimate tokens for each message and keep most recent
-                history_tokens = 0
-                kept_messages = []
-                
-                # Count backwards from most recent
-                for msg in reversed(conversation_history):
-                    msg_text = f"{msg['role']}: {msg['content']}"
-                    msg_tokens = len(self.tokenizer.encode(msg_text, add_special_tokens=False))
-                    
-                    if history_tokens + msg_tokens <= max_history_tokens:
-                        kept_messages.insert(0, msg)  # Insert at beginning to maintain order
-                        history_tokens += msg_tokens
-                    else:
-                        break
-                
-                conversation_history = kept_messages
-                if len(kept_messages) < original_history_count:
-                    logger.warning(f"Truncated conversation history: kept {len(kept_messages)}/{original_history_count} messages")
-            elif max_history_tokens <= 0:
-                logger.warning("Not enough tokens for conversation history, skipping it")
-                conversation_history = []
             
             # Build messages array for Qwen3 chat template
             # Format: [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}, ...]
@@ -452,6 +421,7 @@ class ObeliskLLM:
             input_token_count = inputs['input_ids'].shape[1]
             
             # Log token usage
+            system_content_tokens = len(self.tokenizer.encode(system_content, add_special_tokens=False))
             history_token_count = sum(
                 len(self.tokenizer.encode(f"{msg['role']}: {msg['content']}", add_special_tokens=False))
                 for msg in conversation_history
