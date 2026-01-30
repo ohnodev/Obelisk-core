@@ -241,6 +241,7 @@ def process_evolution_cycle(
                     llm.model.eval()
                     lora_manager.model = llm.model
                     lora_manager.lora_model = trainer.lora_model
+                    llm.lora_manager = lora_manager  # Keep LLM's lora_manager reference in sync
                     
                     # Calculate evolution score (prefer AI scores if available)
                     def get_evolution_score(interaction):
