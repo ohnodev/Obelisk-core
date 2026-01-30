@@ -370,12 +370,14 @@ class ObeliskLLM:
             
             try:
                 # Token 151668 is the closing tag for thinking content (</think>)
-                redacted_end_token = 151668
-                if redacted_end_token in generated_tokens:
-                    # rindex finds the last occurrence (per Qwen3 example)
-                    index = len(generated_tokens) - generated_tokens[::-1].index(redacted_end_token)
-                    thinking_tokens = generated_tokens[:index]
-                    content_tokens = generated_tokens[index + 1:]  # Skip the closing tag token
+                # Per Qwen3 docs: use rindex to find the last occurrence of token 151668
+                end_token = 151668
+                if end_token in generated_tokens:
+                    # Correct reverse index calculation (fixes off-by-one error)
+                    # Find the last occurrence of the end token
+                    last = len(generated_tokens) - 1 - generated_tokens[::-1].index(end_token)
+                    thinking_tokens = generated_tokens[:last]       # before </think>
+                    content_tokens = generated_tokens[last + 1:]   # after </think>
                     
                     thinking_content = self.tokenizer.decode(thinking_tokens, skip_special_tokens=True).strip("\n")
                     final_content = self.tokenizer.decode(content_tokens, skip_special_tokens=True).strip("\n")
