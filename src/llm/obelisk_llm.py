@@ -9,7 +9,7 @@ import re
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model
 from .training import LoRAManager, LoRATrainer
 import warnings
@@ -28,38 +28,6 @@ warnings.filterwarnings("ignore")
 
 logger = get_logger(__name__)
 
-
-class ConversationStopCriteria(StoppingCriteria):
-    """Stop generation when conversation markers appear"""
-    def __init__(self, tokenizer, stop_sequences: List[str], input_length: int):
-        self.tokenizer = tokenizer
-        self.input_length = input_length
-    
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        # Only check the newly generated tokens (skip input)
-        if input_ids.shape[1] <= self.input_length:
-            return False
-        
-        generated_tokens = input_ids[0][self.input_length:].tolist()
-        
-        # Decode the entire generated text to check for conversation markers
-        # This is more reliable than token matching since tokenization can vary
-        if len(generated_tokens) > 0:
-            generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
-            
-            # Check for conversation markers only (industry standard)
-            stop_patterns = [
-                "User:", "Overseer:", "The Overseer:", "Assistant:",
-                "\n\nUser:", "\n\nOverseer:", "\n\nThe Overseer:", "\n\nAssistant:",
-                "\nUser:", "\nOverseer:", "\nThe Overseer:", "\nAssistant:"
-            ]
-            
-            # Stop immediately if we see any of these patterns
-            for pattern in stop_patterns:
-                if pattern.lower() in generated_text.lower():
-                    return True
-        
-        return False
 
 class ObeliskLLM:
     # Context window limits (loaded from config)
@@ -446,12 +414,9 @@ class ObeliskLLM:
             max_output_for_device = Config.LLM_MAX_OUTPUT_TOKENS_GPU if self.device == "cuda" else Config.LLM_MAX_OUTPUT_TOKENS
             optimized_max_tokens = min(max_length, max_output_for_device)
             
-            # Create stopping criteria to prevent conversation markers (loaded from config)
-            stop_sequences = Config.LLM_STOP_SEQUENCES
-            stopping_criteria = ConversationStopCriteria(self.tokenizer, stop_sequences, input_token_count)
-            stopping_criteria_list = StoppingCriteriaList([stopping_criteria])
-            
             # Generate with Qwen3 recommended sampling parameters
+            # Note: Qwen3's chat template handles conversation format properly, so we don't need stopping criteria
+            # We rely on max_new_tokens and post-processing safety checks instead
             with torch.inference_mode():
                 # Qwen3 recommended parameters (no presence_penalty - not supported)
                 outputs = self.model.generate(
@@ -466,8 +431,7 @@ class ObeliskLLM:
                     eos_token_id=self.tokenizer.eos_token_id,
                     repetition_penalty=repetition_penalty,
                     use_cache=True,
-                    num_beams=1,
-                    stopping_criteria=stopping_criteria_list
+                    num_beams=1
                 )
             
             # Extract ONLY the newly generated tokens (skip the input prompt)
