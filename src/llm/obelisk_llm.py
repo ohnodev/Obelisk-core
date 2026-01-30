@@ -343,42 +343,37 @@ class ObeliskLLM:
             system_prompt = self.get_system_prompt()
             system_tokens = len(self.tokenizer.encode(system_prompt, add_special_tokens=False))
             
-            # Parse conversation context (new format: dict with 'messages' and 'memories')
+            # Parse conversation context (dict format: {"messages": [...], "memories": "..."})
             # Qwen3 expects conversation history as message entries, not strings
             conversation_history = []  # List of {"role": "user"/"assistant", "content": "..."}
             memories_text = ""  # Memories and user context (stays in system message)
             
             if conversation_context:
-                # Handle both new dict format and old string format (backward compatibility)
-                if isinstance(conversation_context, dict):
-                    # New format: {"messages": [...], "memories": "..."}
-                    conversation_history = conversation_context.get("messages", [])
-                    memories_text = conversation_context.get("memories", "")
-                    
-                    # Qwen3 best practice: Remove thinking content from conversation history
-                    # Per docs: "No Thinking Content in History: In multi-turn conversations,
-                    # the historical model output should only include the final output part"
-                    # The chat template handles this automatically, but we add defensive filtering
-                    cleaned_history = []
-                    for msg in conversation_history:
-                        if msg.get("role") == "assistant":
-                            content = msg.get("content", "")
-                            # Remove thinking content wrapped in <think>...</think>
-                            # Qwen3 format: thinking content uses <think> tags
-                            # This is a defensive measure to ensure no thinking content in history
-                            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
-                            content = content.strip()
-                            if content:  # Only add if there's content left after cleaning
-                                cleaned_history.append({"role": "assistant", "content": content})
-                        else:
-                            # User messages and other roles pass through unchanged
-                            cleaned_history.append(msg)
-                    conversation_history = cleaned_history
-                elif isinstance(conversation_context, str):
-                    # Old format: string (for backward compatibility during transition)
-                    # This should not happen in normal operation, but handle gracefully
-                    logger.warning("Received string format conversation_context, expected dict. This is deprecated.")
-                    memories_text = conversation_context  # Fallback: put entire string in memories
+                if not isinstance(conversation_context, dict):
+                    raise ValueError(f"conversation_context must be a dict with 'messages' and 'memories' keys, got {type(conversation_context)}")
+                
+                conversation_history = conversation_context.get("messages", [])
+                memories_text = conversation_context.get("memories", "")
+                
+                # Qwen3 best practice: Remove thinking content from conversation history
+                # Per docs: "No Thinking Content in History: In multi-turn conversations,
+                # the historical model output should only include the final output part"
+                # The chat template handles this automatically, but we add defensive filtering
+                cleaned_history = []
+                for msg in conversation_history:
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        # Remove thinking content wrapped in <think>...</think>
+                        # Qwen3 format: thinking content uses <think> tags
+                        # This is a defensive measure to ensure no thinking content in history
+                        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+                        content = content.strip()
+                        if content:  # Only add if there's content left after cleaning
+                            cleaned_history.append({"role": "assistant", "content": content})
+                    else:
+                        # User messages and other roles pass through unchanged
+                        cleaned_history.append(msg)
+                conversation_history = cleaned_history
             
             # Build system message (system prompt + memories)
             system_content = system_prompt
