@@ -9,7 +9,16 @@ import importlib.util
 
 # Import config from root directory (proper way without sys.path hack)
 _config_path = Path(__file__).parent.parent.parent / "config.py"
+if not _config_path.exists():
+    raise FileNotFoundError(f"config.py not found at {_config_path}")
+
 spec = importlib.util.spec_from_file_location("config", _config_path)
+if spec is None:
+    raise ImportError(f"Failed to create spec for config.py at {_config_path}")
+
+if spec.loader is None:
+    raise ImportError(f"Spec loader is None for config.py at {_config_path}")
+
 config_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(config_module)
 Config = config_module.Config
