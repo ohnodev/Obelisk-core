@@ -93,14 +93,14 @@ class ObeliskMemoryManager:
             RecentConversationBuffer instance with last k message pairs
         """
         if user_id not in self.buffers:
-            # Initialize interaction count cache first (only once per user, on first buffer load)
-            # This happens before the hot path, so it's fine to read from disk here
-            if user_id not in self.interaction_counts:
-                all_interactions = self.storage.get_user_interactions(user_id, limit=None)
-                self.interaction_counts[user_id] = len(all_interactions)
-            
-            # Load only recent messages (last k*2 messages = k message pairs) for buffer
+            # Load recent messages (last k*2 messages = k message pairs) for buffer
             interactions = self.storage.get_user_interactions(user_id, limit=self.k * 2)
+            
+            # Initialize interaction count cache from what we loaded
+            # This is just for the buffer - actual count will sync as we add interactions
+            if user_id not in self.interaction_counts:
+                # Start with count from loaded interactions - will be accurate after first add_interaction
+                self.interaction_counts[user_id] = len(interactions)
             
             # Create buffer
             buffer = RecentConversationBuffer(k=self.k)

@@ -174,15 +174,17 @@ def chat(mode):
             
             # Add to memory (handles storage internally)
             # Check if summarization will occur (every N interactions)
-            # Each interaction is already a pair (query + response), so we count interactions directly
-            # Check from storage (not buffer, since buffer is just a window)
-            interactions = memory_manager.storage.get_user_interactions(user_id, limit=memory_manager.summarize_threshold * 2)
-            interaction_count = len(interactions)
+            # Use the cached count from memory_manager instead of reading from disk
+            # Get the current count from the manager's cache (initialized in get_buffer())
+            # We need to check what the count will be AFTER we add this interaction
+            # Since get_buffer() was called earlier, the count should be initialized
+            # If not initialized, it will be 0, which is fine for the check
+            current_count = memory_manager.interaction_counts.get(user_id, 0)
             
             # Check if this interaction will trigger summarization
-            # After adding this interaction, the count will be interaction_count + 1
-            # Summarization triggers when (interaction_count + 1) % summarize_threshold == 0
-            will_summarize = (interaction_count + 1) > 0 and (interaction_count + 1) % memory_manager.summarize_threshold == 0
+            # After adding this interaction, the count will be current_count + 1
+            # Summarization triggers when (current_count + 1) % summarize_threshold == 0
+            will_summarize = (current_count + 1) > 0 and (current_count + 1) % memory_manager.summarize_threshold == 0
             
             if will_summarize:
                 # Show spinner only when summarization will occur
