@@ -6,10 +6,27 @@ Integrates with EvolutionEvaluator for AI-powered interaction rating
 import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+from pathlib import Path
+import importlib.util
+from peft import LoraConfig
 from .config import REWARD_DISTRIBUTION
 from .evaluator import EvolutionEvaluator
+from .training import LoRAManager, LoRATrainer
 from ..storage.base import StorageInterface
 from ..utils.logger import get_logger
+
+# Import config for LoRA settings
+_config_path = Path(__file__).parent.parent.parent / "config.py"
+if _config_path.exists():
+    spec = importlib.util.spec_from_file_location("config", _config_path)
+    if spec and spec.loader:
+        config_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_module)
+        Config = config_module.Config
+    else:
+        raise ImportError(f"Failed to load config from {_config_path}")
+else:
+    raise FileNotFoundError(f"config.py not found at {_config_path}")
 
 logger = get_logger(__name__)
 
@@ -60,7 +77,6 @@ def process_evolution_cycle(
         return {'message': 'Cycle completed with no interactions', 'cycle_id': cycle_id}
     
     # Evaluate interactions using Mistral AI agent (prod mode) or self-evaluation (solo mode)
-    from config import Config
     evaluator = EvolutionEvaluator(
         storage=storage,
         llm=llm,
@@ -183,15 +199,50 @@ def process_evolution_cycle(
             if len(training_data) >= 5:
                 logger.info(f"Fine-tuning model with {len(training_data)} top interactions...")
                 
+                # Create LoRA config
+                lora_config = LoraConfig(
+                    r=Config.LLM_LORA_R,
+                    lora_alpha=Config.LLM_LORA_ALPHA,
+                    target_modules=Config.LLM_LORA_TARGET_MODULES,
+                    lora_dropout=Config.LLM_LORA_DROPOUT,
+                    bias="none",
+                    task_type="CAUSAL_LM"
+                )
+                
+                # Create LoRA manager
+                lora_manager = LoRAManager(
+                    model=llm.model,
+                    lora_config=lora_config,
+                    storage=storage,
+                    model_name=llm.MODEL_NAME
+                )
+                
+                # Create trainer
+                trainer = LoRATrainer(
+                    model=llm.model,
+                    tokenizer=llm.tokenizer,
+                    lora_config=lora_config,
+                    lora_model=lora_manager.lora_model,
+                    device=llm.device,
+                    get_system_prompt_fn=llm.get_system_prompt
+                )
+                
                 # Fine-tune
-                training_result = llm.fine_tune_lora(
+                training_result = trainer.fine_tune(
                     training_data=training_data,
-                    cycle_number=cycle_number,
                     epochs=3,
-                    learning_rate=0.0001
+                    learning_rate=0.0001,
+                    batch_size=4
                 )
                 
                 if training_result.get('success'):
+                    # Update model references
+                    llm.model = trainer.lora_model
+                    llm.model.eval()
+                    lora_manager.model = llm.model
+                    lora_manager.lora_model = trainer.lora_model
+                    llm.lora_manager = lora_manager  # Keep LLM's lora_manager reference in sync
+                    
                     # Calculate evolution score (prefer AI scores if available)
                     def get_evolution_score(interaction):
                         ai_score = interaction.get('ai_overall_score')
@@ -205,7 +256,7 @@ def process_evolution_cycle(
                     ) / len(top_interactions) if top_interactions else 0.0
                     
                     # Save LoRA weights
-                    weight_id = llm.save_lora_weights(
+                    weight_id = lora_manager.save_weights(
                         cycle_number=cycle_number,
                         evolution_score=evolution_score,
                         interactions_used=len(training_data),
@@ -216,13 +267,23 @@ def process_evolution_cycle(
                         }
                     )
                     
-                    model_training_result = {
-                        'success': True,
-                        'weight_id': weight_id,
-                        'training_loss': training_result.get('training_loss'),
-                        'examples_trained': len(training_data)
-                    }
-                    logger.info("Model fine-tuning completed and weights saved")
+                    # Check if weight persistence failed
+                    if weight_id is None:
+                        model_training_result = {
+                            'success': False,
+                            'error': 'Failed to save trained weights',
+                            'training_loss': training_result.get('training_loss'),
+                            'examples_trained': len(training_data)
+                        }
+                        logger.error("Model fine-tuning completed but weights failed to save")
+                    else:
+                        model_training_result = {
+                            'success': True,
+                            'weight_id': weight_id,
+                            'training_loss': training_result.get('training_loss'),
+                            'examples_trained': len(training_data)
+                        }
+                        logger.info("Model fine-tuning completed and weights saved")
                     
                     # Create activity log entry for model evolution
                     try:
