@@ -3,7 +3,7 @@ API routes for Obelisk Core
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from pathlib import Path
 import importlib.util
 
@@ -29,7 +29,7 @@ router = APIRouter()
 # Request/Response models
 class ConversationMessage(BaseModel):
     """A single message in conversation history"""
-    role: str = Field(..., description="Message role: 'user' or 'assistant'")
+    role: Literal["user", "assistant"] = Field(..., description="Message role: 'user' or 'assistant'")
     content: str = Field(..., description="Message content")
 
 
