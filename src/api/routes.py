@@ -105,8 +105,8 @@ class GenerateRequest(BaseModel):
     quantum_influence: float = Field(
         default=0.7,
         ge=0.0,
-        le=0.1,
-        description="Quantum influence value (0.0-0.1)"
+        le=1.0,
+        description="Quantum influence value (0.0-1.0)"
     )
     conversation_context: Optional[ConversationContext] = Field(
         default=None,
