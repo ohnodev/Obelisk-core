@@ -4,13 +4,15 @@ API routes for Obelisk Core
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
-import sys
-import os
+from pathlib import Path
+import importlib.util
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-from config import Config
+# Import config from root directory (proper way without sys.path hack)
+_config_path = Path(__file__).parent.parent.parent / "config.py"
+spec = importlib.util.spec_from_file_location("config", _config_path)
+config_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(config_module)
+Config = config_module.Config
 
 router = APIRouter()
 
@@ -65,7 +67,7 @@ def get_memory_manager():
 class GenerateRequest(BaseModel):
     prompt: str
     quantum_influence: float = 0.7
-    conversation_context: Optional[str] = None
+    conversation_context: Optional[Dict[str, Any]] = None
     user_id: Optional[str] = None
 
 class GenerateResponse(BaseModel):

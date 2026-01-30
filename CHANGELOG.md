@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Old string format no longer supported (raises `ValueError`)
 
 ### Removed
-- Backward compatibility for string format `conversation_context`
+- Support for string format `conversation_context` (now requires dict format)
 - Redundant conversation history truncation in LLM
 - `ConversationStopCriteria` class (Qwen3 chat template handles it)
 - Unused `PeftModel` import
