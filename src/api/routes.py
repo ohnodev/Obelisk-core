@@ -2,17 +2,55 @@
 API routes for Obelisk Core
 """
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-import sys
-import os
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List, Literal
+from pathlib import Path
+import importlib.util
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+# Import config from root directory (proper way without sys.path hack)
+_config_path = Path(__file__).parent.parent.parent / "config.py"
+if not _config_path.exists():
+    raise FileNotFoundError(f"config.py not found at {_config_path}")
 
-from config import Config
+spec = importlib.util.spec_from_file_location("config", _config_path)
+if spec is None:
+    raise ImportError(f"Failed to create spec for config.py at {_config_path}")
+
+if spec.loader is None:
+    raise ImportError(f"Spec loader is None for config.py at {_config_path}")
+
+config_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(config_module)
+Config = config_module.Config
 
 router = APIRouter()
+
+
+# Request/Response models
+class ConversationMessage(BaseModel):
+    """A single message in conversation history"""
+    role: Literal["user", "assistant"] = Field(..., description="Message role: 'user' or 'assistant'")
+    content: str = Field(..., description="Message content")
+
+
+class ConversationContext(BaseModel):
+    """Conversation context with messages and memories"""
+    messages: List[ConversationMessage] = Field(
+        default_factory=list,
+        description="List of conversation messages (Qwen3 format)"
+    )
+    memories: str = Field(
+        default="",
+        description="Selected memory summaries for system message"
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict format expected by ObeliskLLM.generate()"""
+        return {
+            "messages": [{"role": msg.role, "content": msg.content} for msg in self.messages],
+            "memories": self.memories
+        }
+
 
 # Global instances (initialized on first request)
 _storage = None
@@ -61,12 +99,23 @@ def get_memory_manager():
     return _memory_manager
 
 
-# Request/Response models
 class GenerateRequest(BaseModel):
-    prompt: str
-    quantum_influence: float = 0.7
-    conversation_context: Optional[str] = None
-    user_id: Optional[str] = None
+    """Request model for LLM generation"""
+    prompt: str = Field(..., description="User's query/prompt")
+    quantum_influence: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Quantum influence value (0.0-1.0)"
+    )
+    conversation_context: Optional[ConversationContext] = Field(
+        default=None,
+        description="Conversation context with messages and memories"
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="User identifier for memory management"
+    )
 
 class GenerateResponse(BaseModel):
     response: str
@@ -101,12 +150,18 @@ async def generate(request: GenerateRequest):
         # Get conversation context if user_id provided (always runs memory selection)
         conversation_context = request.conversation_context
         if request.user_id and not conversation_context:
-            conversation_context = memory_manager.get_conversation_context(request.user_id, user_query=request.prompt)
+            # Get context from memory manager (returns dict format)
+            context_dict = memory_manager.get_conversation_context(request.user_id, user_query=request.prompt)
+            # Convert to ConversationContext model for validation
+            conversation_context = ConversationContext(**context_dict) if context_dict else None
+        
+        # Convert ConversationContext to dict format expected by ObeliskLLM.generate()
+        context_dict = conversation_context.to_dict() if conversation_context else None
         
         result = llm.generate(
             query=request.prompt,
             quantum_influence=request.quantum_influence,
-            conversation_context=conversation_context
+            conversation_context=context_dict
         )
         
         # Add to memory if user_id provided (handles storage internally - Option C)
