@@ -251,7 +251,10 @@ obelisk-core/
 │   │       └── config.py         # Agent configuration
 │   ├── storage/                 # Storage abstraction (local JSON / Supabase)
 │   ├── api/                     # FastAPI server and routes
-│   └── cli/                     # Command-line interface
+│   ├── cli/                     # Command-line interface
+│   ├── evolution/               # Configuration, evaluation, and processing for evolution features
+│   ├── quantum/                 # IBM quantum service integration
+│   └── utils/                   # Utility helpers (JSON parsing, logging)
 ├── config.py                    # Configuration management
 ├── requirements.txt              # Python dependencies
 └── setup.py                      # Package setup
