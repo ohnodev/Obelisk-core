@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model
-from ..evolution.training import LoRAManager, LoRATrainer
+from ..evolution.training import LoRAManager
 import warnings
 import importlib.util
 
@@ -160,81 +160,6 @@ class ObeliskLLM:
             self.model = None
             self.tokenizer = None
     
-    def save_lora_weights(self, cycle_number: int, evolution_score: float, interactions_used: int, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """Save current LoRA weights to storage"""
-        if not self.lora_manager:
-            logger.warning("No LoRA manager configured, cannot save LoRA weights")
-            return None
-        
-        # Ensure LoRA manager has the current model reference
-        # If model has LoRA applied, it's already the lora_model
-        self.lora_manager.model = self.model
-        # Check if model is a PEFT model (has LoRA)
-        if hasattr(self.model, 'peft_config'):
-            self.lora_manager.lora_model = self.model
-        else:
-            # Create LoRA adapter if it doesn't exist
-            self.lora_manager.lora_model = get_peft_model(self.model, self.lora_config)
-        
-        return self.lora_manager.save_weights(
-            cycle_number=cycle_number,
-            evolution_score=evolution_score,
-            interactions_used=interactions_used,
-            metadata=metadata
-        )
-    
-    def fine_tune_lora(
-        self,
-        training_data: List[Tuple[str, str]],  # List of (query, response) pairs
-        cycle_number: int,
-        epochs: int = 3,
-        learning_rate: float = 0.0001,
-        batch_size: int = 4
-    ) -> Dict[str, Any]:
-        """
-        Fine-tune the model using LoRA on training data
-        Returns training metrics and saves weights to storage
-        """
-        if not self.lora_manager:
-            return {"error": "No LoRA manager configured"}
-        
-        # Create trainer instance
-        trainer = LoRATrainer(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            lora_config=self.lora_config,
-            lora_model=self.lora_manager.lora_model,
-            device=self.device,
-            get_system_prompt_fn=self.get_system_prompt
-        )
-        
-        # Train
-        result = trainer.fine_tune(
-            training_data=training_data,
-            epochs=epochs,
-            learning_rate=learning_rate,
-            batch_size=batch_size
-        )
-        
-        if result.get("success"):
-            # Update model references
-            self.model = trainer.lora_model
-            self.model.eval()
-            self.lora_manager.model = self.model
-            self.lora_manager.lora_model = trainer.lora_model
-            
-            # Save weights to storage
-            weight_id = self.save_lora_weights(
-                cycle_number=cycle_number,
-                evolution_score=0.0,  # Will be set by evolution processor
-                interactions_used=len(training_data),
-                metadata={"training_loss": result.get("training_loss")}
-            )
-            
-            if weight_id:
-                result["weight_id"] = weight_id
-        
-        return result
 
     def _estimate_memory(self) -> int:
         """Estimate model memory usage in MB"""
