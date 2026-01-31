@@ -199,6 +199,7 @@ class LocalJSONStorage(StorageInterface):
                 'file_size_bytes': len(lora_weights),
                 'checksum': hashlib.sha256(lora_weights).hexdigest(),
                 'created_at': datetime.utcnow().isoformat(),
+                'base_model': metadata.get('base_model') if metadata else None,  # Extract base_model to top level
                 'metadata': metadata or {}
             }
             with open(metadata_file, 'w') as f:
