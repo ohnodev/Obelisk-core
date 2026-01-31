@@ -7,26 +7,13 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-import importlib.util
 from peft import LoraConfig
 from .config import REWARD_DISTRIBUTION
 from .evaluator import EvolutionEvaluator
 from .training import LoRAManager, LoRATrainer
 from ..storage.base import StorageInterface
 from ..utils.logger import get_logger
-
-# Import config for LoRA settings
-_config_path = Path(__file__).parent.parent.parent / "config.py"
-if _config_path.exists():
-    spec = importlib.util.spec_from_file_location("config", _config_path)
-    if spec and spec.loader:
-        config_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(config_module)
-        Config = config_module.Config
-    else:
-        raise ImportError(f"Failed to load config from {_config_path}")
-else:
-    raise FileNotFoundError(f"config.py not found at {_config_path}")
+from ..core.config import Config
 
 logger = get_logger(__name__)
 

@@ -14,15 +14,7 @@ from peft import LoraConfig, get_peft_model
 from ..evolution.training import LoRAManager
 from .thinking_token_utils import split_thinking_tokens
 import warnings
-import importlib.util
-
-# Import config from root directory (proper way without sys.path hack)
-_config_path = Path(__file__).parent.parent.parent / "config.py"
-spec = importlib.util.spec_from_file_location("config", _config_path)
-config_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(config_module)
-Config = config_module.Config
-
+from ..core.config import Config
 from ..utils.logger import get_logger
 
 warnings.filterwarnings("ignore")

@@ -1,16 +1,12 @@
 """
 FastAPI server for Obelisk Core
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-import sys
-import os
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-from config import Config
 from .routes import router
+from ..core.bootstrap import get_container
+from ..core.config import Config
 
 app = FastAPI(title="Obelisk Core API", version="0.1.0-alpha")
 
@@ -26,6 +22,14 @@ app.add_middleware(
 # Include routes
 app.include_router(router, prefix="/api/v1")
 
+
+@app.on_event("startup")
+async def startup():
+    """Initialize services on startup"""
+    # Build container and store in app.state for route access
+    app.state.container = get_container(mode=Config.MODE)
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -35,6 +39,7 @@ async def root():
         "mode": Config.MODE,
         "status": "running"
     }
+
 
 @app.get("/health")
 async def health():

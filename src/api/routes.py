@@ -1,27 +1,12 @@
 """
 API routes for Obelisk Core
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, Literal
-from pathlib import Path
-import importlib.util
 
-# Import config from root directory (proper way without sys.path hack)
-_config_path = Path(__file__).parent.parent.parent / "config.py"
-if not _config_path.exists():
-    raise FileNotFoundError(f"config.py not found at {_config_path}")
-
-spec = importlib.util.spec_from_file_location("config", _config_path)
-if spec is None:
-    raise ImportError(f"Failed to create spec for config.py at {_config_path}")
-
-if spec.loader is None:
-    raise ImportError(f"Spec loader is None for config.py at {_config_path}")
-
-config_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(config_module)
-Config = config_module.Config
+from ..core.container import ServiceContainer
+from ..core.config import Config
 
 router = APIRouter()
 
@@ -52,51 +37,9 @@ class ConversationContext(BaseModel):
         }
 
 
-# Global instances (initialized on first request)
-_storage = None
-_llm = None
-_quantum_service = None
-_memory_manager = None
-
-def get_storage():
-    """Get storage instance"""
-    global _storage
-    if _storage is None:
-        _storage = Config.get_storage()
-    return _storage
-
-def get_llm():
-    """Get LLM instance"""
-    global _llm
-    if _llm is None:
-        from ..llm.obelisk_llm import ObeliskLLM
-        _llm = ObeliskLLM(storage=get_storage())
-    return _llm
-
-def get_quantum_service():
-    """Get quantum service instance"""
-    global _quantum_service
-    if _quantum_service is None:
-        from ..quantum.ibm_quantum_service import IBMQuantumService
-        _quantum_service = IBMQuantumService(
-            api_key=Config.IBM_QUANTUM_API_KEY,
-            instance=Config.IBM_QUANTUM_INSTANCE
-        )
-    return _quantum_service
-
-def get_memory_manager():
-    """Get memory manager instance"""
-    global _memory_manager
-    if _memory_manager is None:
-        from ..memory.memory_manager import ObeliskMemoryManager
-        _memory_manager = ObeliskMemoryManager(
-            storage=get_storage(),
-            llm=get_llm(),
-            mistral_api_key=Config.MISTRAL_API_KEY,
-            agent_id=Config.MISTRAL_AGENT_ID,
-            mode=Config.MODE
-        )
-    return _memory_manager
+def get_container(request: Request) -> ServiceContainer:
+    """Get ServiceContainer from app state (injected by FastAPI)"""
+    return request.app.state.container
 
 
 class GenerateRequest(BaseModel):
@@ -141,11 +84,11 @@ class EvolveResponse(BaseModel):
 
 # LLM Endpoints
 @router.post("/generate", response_model=GenerateResponse)
-async def generate(request: GenerateRequest):
+async def generate(request: GenerateRequest, container: ServiceContainer = Depends(get_container)):
     """Generate response from The Obelisk"""
     try:
-        llm = get_llm()
-        memory_manager = get_memory_manager()
+        llm = container.llm
+        memory_manager = container.memory_manager
         
         # Get conversation context if user_id provided (always runs memory selection)
         conversation_context = request.conversation_context
@@ -185,10 +128,10 @@ async def generate(request: GenerateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/health")
-async def health():
+async def health(container: ServiceContainer = Depends(get_container)):
     """Health check"""
     try:
-        llm = get_llm()
+        llm = container.llm
         return {
             "status": "healthy",
             "model_loaded": llm.model is not None,
@@ -204,10 +147,12 @@ async def health():
 
 # Quantum Endpoints
 @router.post("/quantum/influence", response_model=QuantumInfluenceResponse)
-async def get_quantum_influence(request: QuantumInfluenceRequest):
+async def get_quantum_influence(request: QuantumInfluenceRequest, container: ServiceContainer = Depends(get_container)):
     """Get quantum influence value"""
     try:
-        quantum_service = get_quantum_service()
+        if container.quantum_service is None:
+            raise HTTPException(status_code=503, detail="Quantum service not available")
+        quantum_service = container.quantum_service
         result = quantum_service.get_quantum_random(num_qubits=2, shots=128)
         return QuantumInfluenceResponse(
             influence=result.get('value', 0.5),
@@ -219,13 +164,13 @@ async def get_quantum_influence(request: QuantumInfluenceRequest):
 
 # Evolution Endpoints
 @router.post("/evolve", response_model=EvolveResponse)
-async def evolve(request: EvolveRequest):
+async def evolve(request: EvolveRequest, container: ServiceContainer = Depends(get_container)):
     """Process evolution cycle"""
     try:
         from ..evolution.processor import process_evolution_cycle
         
-        storage = get_storage()
-        llm = get_llm()
+        storage = container.storage
+        llm = container.llm
         
         result = process_evolution_cycle(
             cycle_id=request.cycle_id,
@@ -243,10 +188,10 @@ async def evolve(request: EvolveRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/evolution/cycle/{cycle_id}")
-async def get_cycle_status(cycle_id: str):
+async def get_cycle_status(cycle_id: str, container: ServiceContainer = Depends(get_container)):
     """Get evolution cycle status"""
     try:
-        storage = get_storage()
+        storage = container.storage
         cycle = storage.get_evolution_cycle(cycle_id)
         if not cycle:
             raise HTTPException(status_code=404, detail="Cycle not found")
@@ -259,10 +204,10 @@ async def get_cycle_status(cycle_id: str):
 
 # Memory Endpoints
 @router.get("/memory/{user_id}")
-async def get_memory(user_id: str):
+async def get_memory(user_id: str, container: ServiceContainer = Depends(get_container)):
     """Get conversation context for user"""
     try:
-        memory_manager = get_memory_manager()
+        memory_manager = container.memory_manager
         # Note: This endpoint doesn't have a query, use empty string (will use most recent memories)
         context = memory_manager.get_conversation_context(user_id, user_query="")
         return {
@@ -273,10 +218,10 @@ async def get_memory(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/memory/{user_id}")
-async def save_interaction(user_id: str, query: str, response: str):
+async def save_interaction(user_id: str, query: str, response: str, container: ServiceContainer = Depends(get_container)):
     """Save interaction to memory"""
     try:
-        memory_manager = get_memory_manager()
+        memory_manager = container.memory_manager
         memory_manager.add_interaction(user_id, query, response)
         return {"status": "saved"}
     except Exception as e:
