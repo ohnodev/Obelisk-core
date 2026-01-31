@@ -281,7 +281,7 @@ obelisk-core train \
 # Clear all LoRA weights (revert to base model)
 obelisk-core clear-lora
 
-# Clear without confirmation
+# Skip confirmation prompt
 obelisk-core clear-lora --confirm
 ```
 
