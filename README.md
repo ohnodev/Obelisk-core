@@ -145,6 +145,14 @@ obelisk-core serve --port 7779 --mode solo
 # Interactive chat (solo mode only)
 obelisk-core chat
 
+# Train LoRA adapter on a dataset
+obelisk-core train
+obelisk-core train --dataset path/to/dataset.json --epochs 5 --learning-rate 0.0002
+
+# Clear LoRA weights (revert to base model, solo mode only)
+obelisk-core clear-lora
+obelisk-core clear-lora --confirm
+
 # Test LLM
 obelisk-core test
 
@@ -153,8 +161,6 @@ obelisk-core config
 
 # Clear all local memory (fresh start, solo mode only)
 obelisk-core clear
-
-# Clear without confirmation prompt
 obelisk-core clear --confirm
 ```
 
@@ -232,6 +238,55 @@ Non-thinking mode is better for:
 - Quick answers that don't need deep reasoning
 - Faster response times
 
+## LoRA Fine-Tuning
+
+Obelisk Core supports LoRA (Low-Rank Adaptation) fine-tuning to customize the model's behavior:
+
+### Training a LoRA Adapter
+
+1. **Prepare a dataset** in JSON format:
+```json
+[
+  {
+    "user": "your query here",
+    "assistant": "desired response here"
+  }
+]
+```
+
+2. **Train the model**:
+```bash
+obelisk-core train --dataset src/evolution/training/dataset_example.json
+```
+
+3. **Use the trained model**: The LoRA weights are automatically loaded when you run `chat` or use the API.
+
+### Training Options
+
+```bash
+# Basic training with defaults
+obelisk-core train
+
+# Custom dataset and parameters
+obelisk-core train \
+  --dataset path/to/dataset.json \
+  --epochs 5 \
+  --learning-rate 0.0002 \
+  --batch-size 8
+```
+
+### Managing LoRA Weights
+
+```bash
+# Clear all LoRA weights (revert to base model)
+obelisk-core clear-lora
+
+# Clear without confirmation
+obelisk-core clear-lora --confirm
+```
+
+The trained LoRA weights are automatically saved and loaded. The model will use the latest trained weights when you start a chat session.
+
 ## Architecture
 
 ```
@@ -239,9 +294,12 @@ obelisk-core/
 ├── src/
 │   ├── llm/                    # LLM inference (Qwen3-0.6B with thinking mode)
 │   │   ├── obelisk_llm.py      # Core LLM generation
-│   │   └── training/           # LoRA fine-tuning module
-│   │       ├── lora_manager.py # LoRA weight management
-│   │       └── lora_trainer.py # LoRA fine-tuning
+│   │   └── thinking_token_utils.py  # Thinking token parsing utilities
+│   ├── evolution/              # Evolution and training module
+│   │   ├── training/           # LoRA fine-tuning
+│   │   │   ├── lora_manager.py # LoRA weight management
+│   │   │   └── lora_trainer.py # LoRA fine-tuning trainer
+│   │   │   └── dataset_example.json  # Example training dataset
 │   ├── memory/                  # Conversation memory management
 │   │   ├── memory_manager.py    # Main memory orchestration
 │   │   ├── recent_buffer.py    # Recent conversation window (last k pairs)
