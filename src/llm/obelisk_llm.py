@@ -292,37 +292,53 @@ class ObeliskLLM:
         
         return messages
 
-    def _validate_context_window(self, input_token_count: int, max_length: int) -> Optional[Dict[str, Any]]:
+    def _validate_context_window(self, input_token_count: int, max_length: int) -> Dict[str, Any]:
         """
-        Validate context window and return error if exceeded.
+        Validate context window and compute safe output token limit.
         
         Args:
             input_token_count: Number of input tokens
             max_length: Requested max output length
             
         Returns:
-            Error dict if context window exceeded, None otherwise
+            Dict with:
+            - If error: "error" key with error dict (contains "response", "error", "source")
+            - If success: "max_output_tokens" key with clamped safe token count
         """
-        total_tokens_after_generation = input_token_count + self.MAX_OUTPUT_TOKENS
-        if total_tokens_after_generation > self.MAX_CONTEXT_TOKENS:
-            logger.warning(f"Total tokens ({total_tokens_after_generation}) would exceed context limit ({self.MAX_CONTEXT_TOKENS})")
-            max_safe_output = self.MAX_CONTEXT_TOKENS - input_token_count
-            if max_safe_output < 10:
-                return {
+        # Compute safe output tokens: min of requested length, max output tokens, and available context
+        safe_output_tokens = min(
+            max_length,
+            self.MAX_OUTPUT_TOKENS,
+            self.MAX_CONTEXT_TOKENS - input_token_count
+        )
+        
+        if safe_output_tokens <= 0:
+            # Context window exceeded - return error
+            return {
+                "error": {
                     "response": "◊ The Overseer's memory is full. Please shorten your query. ◊",
                     "error": "Context window exceeded",
                     "source": "error_fallback"
                 }
-        return None
+            }
+        
+        # Return safe token count for caller to use
+        if safe_output_tokens < max_length:
+            logger.warning(
+                f"Requested max_length ({max_length}) reduced to {safe_output_tokens} "
+                f"to fit context window (input: {input_token_count}, limit: {self.MAX_CONTEXT_TOKENS})"
+            )
+        
+        return {"max_output_tokens": safe_output_tokens}
 
-    def _generate_tokens(self, inputs, sampling_params: Dict[str, float], max_length: int, enable_thinking: bool) -> List[int]:
+    def _generate_tokens(self, inputs, sampling_params: Dict[str, float], max_output_tokens: int, enable_thinking: bool) -> List[int]:
         """
         Generate tokens from the model.
         
         Args:
             inputs: Tokenized input tensors
             sampling_params: Dict with temperature, top_p, top_k, repetition_penalty
-            max_length: Maximum output length
+            max_output_tokens: Maximum output tokens (already validated and clamped)
             enable_thinking: Whether thinking mode is enabled
             
         Returns:
@@ -330,23 +346,42 @@ class ObeliskLLM:
         """
         # Set output token limit (use GPU limit if available, otherwise CPU limit)
         max_output_for_device = Config.LLM_MAX_OUTPUT_TOKENS_GPU if self.device == "cuda" else Config.LLM_MAX_OUTPUT_TOKENS
-        optimized_max_tokens = min(max_length, max_output_for_device)
+        optimized_max_tokens = min(max_output_tokens, max_output_for_device)
+        
+        # Build generate kwargs - conditionally include min_p based on transformers version
+        generate_kwargs = {
+            **inputs,
+            "max_new_tokens": optimized_max_tokens,
+            "do_sample": True,
+            "temperature": sampling_params["temperature"],
+            "top_p": sampling_params["top_p"],
+            "top_k": sampling_params["top_k"],
+            "pad_token_id": self.tokenizer.eos_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "repetition_penalty": sampling_params["repetition_penalty"],
+            "use_cache": True,
+            "num_beams": 1
+        }
+        
+        # min_p was added in transformers 4.36.0+ - only include if supported
+        # Check version by comparing version strings (simple approach without packaging)
+        try:
+            import transformers
+            if hasattr(transformers, '__version__'):
+                version_str = transformers.__version__
+                # Simple version comparison: check if >= 4.36.0
+                version_parts = version_str.split('.')
+                if len(version_parts) >= 2:
+                    major = int(version_parts[0])
+                    minor = int(version_parts[1])
+                    if major > 4 or (major == 4 and minor >= 36):
+                        generate_kwargs["min_p"] = 0.0  # Qwen3 recommended
+        except (ImportError, ValueError, AttributeError):
+            # If version check fails, skip min_p to ensure compatibility with transformers 4.30.0
+            pass
         
         with torch.inference_mode():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=optimized_max_tokens,
-                do_sample=True,
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                top_k=sampling_params["top_k"],
-                min_p=0.0,  # Qwen3 recommended
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                repetition_penalty=sampling_params["repetition_penalty"],
-                use_cache=True,
-                num_beams=1
-            )
+            outputs = self.model.generate(**generate_kwargs)
         
         # Extract ONLY the newly generated tokens (skip the input prompt)
         input_length = inputs['input_ids'].shape[1]
@@ -500,13 +535,16 @@ class ObeliskLLM:
             memories_token_count = len(self.tokenizer.encode(memories_text, add_special_tokens=False)) if memories_text else 0
             logger.debug(f"Input tokens: {input_token_count} (system: {system_content_tokens}, history: {history_token_count}, memories: {memories_token_count}, query: {len(query_tokens)}, messages: {len(conversation_history)})")
             
-            # Validate context window
-            context_error = self._validate_context_window(input_token_count, max_length)
-            if context_error:
-                return context_error
+            # Validate context window and get safe output token limit
+            context_validation = self._validate_context_window(input_token_count, max_length)
+            if "error" in context_validation:
+                return context_validation["error"]
             
-            # Generate tokens
-            generated_tokens = self._generate_tokens(inputs, sampling_params, max_length, enable_thinking)
+            # Use the safe output token count from validation
+            safe_max_tokens = context_validation["max_output_tokens"]
+            
+            # Generate tokens using the validated safe token limit
+            generated_tokens = self._generate_tokens(inputs, sampling_params, safe_max_tokens, enable_thinking)
             
             # Parse thinking and content tokens
             thinking_content, final_content = self._parse_thinking_tokens(generated_tokens, enable_thinking)
