@@ -49,7 +49,7 @@ def serve(port, mode, host):
         sys.exit(1)
     
     click.echo(f"🚀 Starting Obelisk Core API server in {Config.MODE} mode...")
-    click.echo(f"   [ALPHA VERSION]")
+    click.echo("   [ALPHA VERSION]")
     click.echo(f"   Host: {host}")
     click.echo(f"   Port: {port}")
     
@@ -258,10 +258,10 @@ def evolve(cycle_id, fine_tune):
         if result.get('model_training'):
             training = result['model_training']
             if training.get('success'):
-                click.echo(f"   Model training: ✅ Success")
+                click.echo("   Model training: ✅ Success")
                 click.echo(f"   Weight ID: {training.get('weight_id')}")
             else:
-                click.echo(f"   Model training: ❌ Failed")
+                click.echo("   Model training: ❌ Failed")
                 click.echo(f"   Error: {training.get('error')}")
         
     except Exception as e:
@@ -531,7 +531,7 @@ def clear(confirm):
                 memory_folder.mkdir(parents=True, exist_ok=True)
                 (memory_folder / "interactions").mkdir(parents=True, exist_ok=True)
             
-            click.echo(f"✅ Cleared all local memory!")
+            click.echo("✅ Cleared all local memory!")
             click.echo(f"   Deleted {total_files} files")
             click.echo(f"   Storage path: {storage_path}")
             click.echo("   The Overseer's memory has been reset.")
