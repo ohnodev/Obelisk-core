@@ -179,6 +179,303 @@ class ObeliskLLM:
         """Get The Overseer system prompt - loaded from config"""
         return Config.AGENT_PROMPT
 
+    def _prepare_sampling_parameters(self, quantum_influence: float) -> Dict[str, float]:
+        """
+        Prepare and validate sampling parameters with quantum influence.
+        
+        Args:
+            quantum_influence: Quantum random value (0-0.1) to influence creativity (will be clamped)
+            
+        Returns:
+            Dict with temperature, top_p, top_k, repetition_penalty, and clamped quantum_influence
+        """
+        # Clamp quantum_influence to valid range [0.0, 0.1]
+        clamped_quantum_influence = max(0.0, min(0.1, quantum_influence))
+        
+        # Log if clamping occurred
+        if clamped_quantum_influence != quantum_influence:
+            logger.debug(f"quantum_influence clamped from {quantum_influence} to {clamped_quantum_influence}")
+        
+        # Apply quantum influence (ranges from config)
+        base_temp = Config.LLM_TEMPERATURE_BASE
+        base_top_p = Config.LLM_TOP_P_BASE
+        top_k = Config.LLM_TOP_K
+        
+        temperature = base_temp + (clamped_quantum_influence * Config.LLM_QUANTUM_TEMPERATURE_RANGE)
+        top_p = base_top_p + (clamped_quantum_influence * Config.LLM_QUANTUM_TOP_P_RANGE)
+        
+        # Validate and clamp sampling parameters to safe ranges
+        temperature = max(0.1, min(0.9, temperature))
+        top_p = max(0.01, min(1.0, top_p))
+        repetition_penalty = max(1.0, Config.LLM_REPETITION_PENALTY)
+        
+        return {
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "repetition_penalty": repetition_penalty,
+            "quantum_influence": clamped_quantum_influence  # Return clamped value for metadata
+        }
+
+    def _validate_and_truncate_query(self, query: str) -> Tuple[str, List[int]]:
+        """
+        Validate and truncate user query if too long.
+        
+        Args:
+            query: User's query string
+            
+        Returns:
+            Tuple of (validated_query, query_tokens)
+        """
+        query_tokens = self.tokenizer.encode(query, add_special_tokens=False)
+        if len(query_tokens) > self.MAX_USER_QUERY_TOKENS:
+            logger.warning(f"User query too long ({len(query_tokens)} tokens), truncating to {self.MAX_USER_QUERY_TOKENS} tokens")
+            truncated_tokens = query_tokens[:self.MAX_USER_QUERY_TOKENS]
+            query = self.tokenizer.decode(truncated_tokens, skip_special_tokens=True)
+            query_tokens = truncated_tokens
+        return query, query_tokens
+
+    def _parse_conversation_context(self, conversation_context: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, str]], str]:
+        """
+        Parse and clean conversation context.
+        
+        Args:
+            conversation_context: Dict with 'messages' and 'memories' keys
+            
+        Returns:
+            Tuple of (cleaned_conversation_history, memories_text)
+        """
+        conversation_history = []
+        memories_text = ""
+        
+        if conversation_context:
+            if not isinstance(conversation_context, dict):
+                raise ValueError(f"conversation_context must be a dict with 'messages' and 'memories' keys, got {type(conversation_context)}")
+            
+            conversation_history = conversation_context.get("messages", [])
+            memories_text = conversation_context.get("memories", "")
+            
+            # Qwen3 best practice: Remove thinking content from conversation history
+            cleaned_history = []
+            for msg in conversation_history:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    # Remove thinking content wrapped in <think>...</think>
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
+                    content = content.strip()
+                    if content:  # Only add if there's content left after cleaning
+                        cleaned_history.append({"role": "assistant", "content": content})
+                else:
+                    # User messages and other roles pass through unchanged
+                    cleaned_history.append(msg)
+            conversation_history = cleaned_history
+        
+        return conversation_history, memories_text
+
+    def _build_messages(self, query: str, conversation_history: List[Dict[str, str]], memories_text: str) -> List[Dict[str, str]]:
+        """
+        Build messages array for Qwen3 chat template.
+        
+        Args:
+            query: Current user query
+            conversation_history: List of previous messages
+            memories_text: Memories string to include in system message
+            
+        Returns:
+            List of message dicts in Qwen3 format
+        """
+        system_prompt = self.get_system_prompt()
+        system_content = system_prompt
+        if memories_text:
+            system_content = f"{system_prompt}\n\n{memories_text}"
+        
+        messages = [
+            {"role": "system", "content": system_content},
+            *conversation_history,
+            {"role": "user", "content": query}
+        ]
+        
+        return messages
+
+    def _validate_context_window(self, input_token_count: int, max_length: int) -> Dict[str, Any]:
+        """
+        Validate context window and compute safe output token limit.
+        
+        Args:
+            input_token_count: Number of input tokens
+            max_length: Requested max output length
+            
+        Returns:
+            Dict with:
+            - If error: "error" key with error dict (contains "response", "error", "source")
+            - If success: "max_output_tokens" key with clamped safe token count
+        """
+        # Compute safe output tokens: min of requested length, max output tokens, and available context
+        safe_output_tokens = min(
+            max_length,
+            self.MAX_OUTPUT_TOKENS,
+            self.MAX_CONTEXT_TOKENS - input_token_count
+        )
+        
+        if safe_output_tokens <= 0:
+            # Context window exceeded - return error
+            return {
+                "error": {
+                    "response": "◊ The Overseer's memory is full. Please shorten your query. ◊",
+                    "error": "Context window exceeded",
+                    "source": "error_fallback"
+                }
+            }
+        
+        # Return safe token count for caller to use
+        if safe_output_tokens < max_length:
+            logger.warning(
+                f"Requested max_length ({max_length}) reduced to {safe_output_tokens} "
+                f"to fit context window (input: {input_token_count}, limit: {self.MAX_CONTEXT_TOKENS})"
+            )
+        
+        return {"max_output_tokens": safe_output_tokens}
+
+    def _generate_tokens(self, inputs, sampling_params: Dict[str, float], max_output_tokens: int, enable_thinking: bool) -> List[int]:
+        """
+        Generate tokens from the model.
+        
+        Args:
+            inputs: Tokenized input tensors
+            sampling_params: Dict with temperature, top_p, top_k, repetition_penalty
+            max_output_tokens: Maximum output tokens (already validated and clamped)
+            enable_thinking: Whether thinking mode is enabled
+            
+        Returns:
+            List of generated token IDs
+        """
+        # Set output token limit (use GPU limit if available, otherwise CPU limit)
+        max_output_for_device = Config.LLM_MAX_OUTPUT_TOKENS_GPU if self.device == "cuda" else Config.LLM_MAX_OUTPUT_TOKENS
+        optimized_max_tokens = min(max_output_tokens, max_output_for_device)
+        
+        # Build generate kwargs - conditionally include min_p based on transformers version
+        generate_kwargs = {
+            **inputs,
+            "max_new_tokens": optimized_max_tokens,
+            "do_sample": True,
+            "temperature": sampling_params["temperature"],
+            "top_p": sampling_params["top_p"],
+            "top_k": sampling_params["top_k"],
+            "pad_token_id": self.tokenizer.eos_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "repetition_penalty": sampling_params["repetition_penalty"],
+            "use_cache": True,
+            "num_beams": 1
+        }
+        
+        # min_p was added in transformers 4.36.0+ - only include if supported
+        # Check version by comparing version strings (simple approach without packaging)
+        try:
+            import transformers
+            if hasattr(transformers, '__version__'):
+                version_str = transformers.__version__
+                # Simple version comparison: check if >= 4.36.0
+                version_parts = version_str.split('.')
+                if len(version_parts) >= 2:
+                    major = int(version_parts[0])
+                    minor = int(version_parts[1])
+                    if major > 4 or (major == 4 and minor >= 36):
+                        generate_kwargs["min_p"] = 0.0  # Qwen3 recommended
+        except (ImportError, ValueError, AttributeError):
+            # If version check fails, skip min_p to ensure compatibility with transformers 4.30.0
+            pass
+        
+        with torch.inference_mode():
+            outputs = self.model.generate(**generate_kwargs)
+        
+        # Extract ONLY the newly generated tokens (skip the input prompt)
+        input_length = inputs['input_ids'].shape[1]
+        generated_tokens = outputs[0][input_length:].tolist()
+        
+        return generated_tokens
+
+    def _parse_thinking_tokens(self, generated_tokens: List[int], enable_thinking: bool) -> Tuple[str, str]:
+        """
+        Parse thinking and content tokens from generated output.
+        
+        Args:
+            generated_tokens: List of generated token IDs
+            enable_thinking: Whether thinking mode was enabled
+            
+        Returns:
+            Tuple of (thinking_content, final_content)
+        """
+        if enable_thinking:
+            thinking_tokens, content_tokens = split_thinking_tokens(generated_tokens)
+            
+            if thinking_tokens:
+                thinking_content = self.tokenizer.decode(thinking_tokens, skip_special_tokens=True).strip("\n")
+            else:
+                thinking_content = ""
+                logger.debug("No thinking token (151668) found in output")
+            
+            if content_tokens:
+                final_content = self.tokenizer.decode(content_tokens, skip_special_tokens=True).strip("\n")
+            else:
+                final_content = ""
+                logger.debug("No content tokens after thinking block")
+        else:
+            # When thinking is disabled, all tokens are content
+            thinking_content = ""
+            final_content = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip("\n")
+            logger.debug("Thinking mode disabled - all tokens treated as content")
+        
+        return thinking_content, final_content
+
+    def _post_process_response(self, raw_response: str) -> str:
+        """
+        Post-process response to remove artifacts and clean up formatting.
+        
+        Args:
+            raw_response: Raw response from model
+            
+        Returns:
+            Cleaned response string
+        """
+        response = raw_response
+        
+        # Remove everything after conversation markers (User:, Overseer:, The Overseer:, Assistant:)
+        for marker in ['User:', 'Overseer:', 'The Overseer:', 'Assistant:']:
+            if marker.lower() in response.lower():
+                pattern = re.compile(re.escape(marker), re.IGNORECASE)
+                match = pattern.search(response)
+                if match:
+                    response = response[:match.start()].strip()
+                    logger.debug(f"Removed conversation marker '{marker}' from response (safety check)")
+        
+        # Remove any trailing incomplete sentences or fragments only if they contain conversation markers
+        if response:
+            last_sentence_end = max(
+                response.rfind('.'),
+                response.rfind('!'),
+                response.rfind('?')
+            )
+            
+            # Only truncate if what comes after looks like training artifacts
+            if last_sentence_end > 0 and last_sentence_end < len(response) - 10:
+                after_sentence = response[last_sentence_end + 1:].strip().lower()
+                artifact_keywords = ['user:', 'assistant:', 'overseer:', 'the overseer:']
+                if any(keyword in after_sentence for keyword in artifact_keywords):
+                    response = response[:last_sentence_end + 1].strip()
+                    logger.debug("Removed trailing content with conversation markers (safety check)")
+        
+        # Preserve paragraph structure - only normalize excessive whitespace
+        response = re.sub(r'[ \t]{3,}', ' ', response)  # Multiple spaces/tabs -> single space
+        response = re.sub(r'\n{3,}', '\n\n', response)  # 3+ newlines -> double newline
+        response = response.strip()
+        
+        # Fallback if empty
+        if not response or len(response.strip()) < 3:
+            logger.warning(f"Response too short ({len(response)} chars), using fallback")
+            response = "◊ The Overseer processes your query. ◊"
+        
+        return response
+
     def generate(self, query: str, quantum_influence: float = 0.7, max_length: int = 1024, conversation_context: Optional[Dict[str, Any]] = None, enable_thinking: bool = True) -> Dict[str, Any]:
         """
         Generate response from The Obelisk
@@ -202,101 +499,19 @@ class ObeliskLLM:
             }
         
         try:
-            # Always use thinking mode for best quality (Qwen3 recommended)
-            # Parameters loaded from config
-            base_temp = Config.LLM_TEMPERATURE_BASE
-            base_top_p = Config.LLM_TOP_P_BASE
-            top_k = Config.LLM_TOP_K
+            # Prepare sampling parameters
+            sampling_params = self._prepare_sampling_parameters(quantum_influence)
             
-            # Clamp quantum_influence to valid range [0.0, 0.1]
-            quantum_influence = max(0.0, min(0.1, quantum_influence))
+            # Validate and truncate query
+            query, query_tokens = self._validate_and_truncate_query(query)
             
-            # Apply quantum influence (ranges from config)
-            temperature = base_temp + (quantum_influence * Config.LLM_QUANTUM_TEMPERATURE_RANGE)
-            top_p = base_top_p + (quantum_influence * Config.LLM_QUANTUM_TOP_P_RANGE)
+            # Parse conversation context
+            conversation_history, memories_text = self._parse_conversation_context(conversation_context)
             
-            # Validate and clamp sampling parameters to safe ranges
-            # Temperature must be > 0 and reasonable (0.1 to 0.9)
-            temperature = max(0.1, min(0.9, temperature))
+            # Build messages array for Qwen3
+            messages = self._build_messages(query, conversation_history, memories_text)
             
-            # Top_p must be between 0 and 1.0
-            top_p = max(0.01, min(1.0, top_p))
-            
-            # Ensure repetition_penalty is valid (> 0)
-            repetition_penalty = max(1.0, Config.LLM_REPETITION_PENALTY)
-            
-            # Validate and truncate user query if too long
-            query_tokens = self.tokenizer.encode(query, add_special_tokens=False)
-            if len(query_tokens) > self.MAX_USER_QUERY_TOKENS:
-                logger.warning(f"User query too long ({len(query_tokens)} tokens), truncating to {self.MAX_USER_QUERY_TOKENS} tokens")
-                truncated_tokens = query_tokens[:self.MAX_USER_QUERY_TOKENS]
-                query = self.tokenizer.decode(truncated_tokens, skip_special_tokens=True)
-                query_tokens = truncated_tokens
-            
-            # Build prompt with conversation context if provided
-            # Qwen3 expects conversation history as message entries, not strings
-            system_prompt = self.get_system_prompt()
-            system_tokens = len(self.tokenizer.encode(system_prompt, add_special_tokens=False))
-            
-            # Parse conversation context (dict format: {"messages": [...], "memories": "..."})
-            # Qwen3 expects conversation history as message entries, not strings
-            conversation_history = []  # List of {"role": "user"/"assistant", "content": "..."}
-            memories_text = ""  # Memories and user context (stays in system message)
-            
-            if conversation_context:
-                if not isinstance(conversation_context, dict):
-                    raise ValueError(f"conversation_context must be a dict with 'messages' and 'memories' keys, got {type(conversation_context)}")
-                
-                conversation_history = conversation_context.get("messages", [])
-                memories_text = conversation_context.get("memories", "")
-                
-                # Qwen3 best practice: Remove thinking content from conversation history
-                # Per docs: "No Thinking Content in History: In multi-turn conversations,
-                # the historical model output should only include the final output part"
-                # The chat template handles this automatically, but we add defensive filtering
-                cleaned_history = []
-                for msg in conversation_history:
-                    if msg.get("role") == "assistant":
-                        content = msg.get("content", "")
-                        # Remove thinking content wrapped in <think>...</think>
-                        # Qwen3 format: thinking content uses <think> tags
-                        # This is a defensive measure to ensure no thinking content in history
-                        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
-                        content = content.strip()
-                        if content:  # Only add if there's content left after cleaning
-                            cleaned_history.append({"role": "assistant", "content": content})
-                    else:
-                        # User messages and other roles pass through unchanged
-                        cleaned_history.append(msg)
-                conversation_history = cleaned_history
-            
-            # Build system message (system prompt + memories)
-            # Note: conversation_history is already properly sized by RecentConversationBuffer
-            # (keeps last k message pairs), so no need for additional truncation here
-            system_content = system_prompt
-            if memories_text:
-                system_content = f"{system_prompt}\n\n{memories_text}"
-            
-            # Build messages array for Qwen3 chat template
-            # Format: [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}, ...]
-            messages = []
-            
-            # Add system message
-            messages.append({
-                "role": "system",
-                "content": system_content
-            })
-            
-            # Add conversation history as message entries (Qwen3 format)
-            messages.extend(conversation_history)
-            
-            # Add current user query
-            messages.append({
-                "role": "user",
-                "content": query
-            })
-            
-            # Apply Qwen3 chat template with optional thinking mode
+            # Apply Qwen3 chat template
             prompt_text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -311,11 +526,12 @@ class ObeliskLLM:
             logger.debug(prompt_text)
             logger.debug("="*80 + "\n")
             
-            # Tokenize and check total input size
+            # Tokenize input
             inputs = self.tokenizer([prompt_text], return_tensors="pt").to(self.model.device)
             input_token_count = inputs['input_ids'].shape[1]
             
             # Log token usage
+            system_content = messages[0]['content']
             system_content_tokens = len(self.tokenizer.encode(system_content, add_special_tokens=False))
             history_token_count = sum(
                 len(self.tokenizer.encode(f"{msg['role']}: {msg['content']}", add_special_tokens=False))
@@ -324,117 +540,29 @@ class ObeliskLLM:
             memories_token_count = len(self.tokenizer.encode(memories_text, add_special_tokens=False)) if memories_text else 0
             logger.debug(f"Input tokens: {input_token_count} (system: {system_content_tokens}, history: {history_token_count}, memories: {memories_token_count}, query: {len(query_tokens)}, messages: {len(conversation_history)})")
             
-            # Check if total (input + output) will exceed context window
-            total_tokens_after_generation = input_token_count + self.MAX_OUTPUT_TOKENS
-            if total_tokens_after_generation > self.MAX_CONTEXT_TOKENS:
-                logger.warning(f"Total tokens ({total_tokens_after_generation}) would exceed context limit ({self.MAX_CONTEXT_TOKENS})")
-                # Reduce output tokens if needed
-                max_safe_output = self.MAX_CONTEXT_TOKENS - input_token_count
-                if max_safe_output < 10:
-                    return {
-                        "response": "◊ The Overseer's memory is full. Please shorten your query. ◊",
-                        "error": "Context window exceeded",
-                        "source": "error_fallback"
-                    }
+            # Validate context window and get safe output token limit
+            context_validation = self._validate_context_window(input_token_count, max_length)
+            if "error" in context_validation:
+                return context_validation["error"]
             
-            # Set output token limit (use GPU limit if available, otherwise CPU limit)
-            max_output_for_device = Config.LLM_MAX_OUTPUT_TOKENS_GPU if self.device == "cuda" else Config.LLM_MAX_OUTPUT_TOKENS
-            optimized_max_tokens = min(max_length, max_output_for_device)
+            # Use the safe output token count from validation
+            safe_max_tokens = context_validation["max_output_tokens"]
             
-            # Generate with Qwen3 recommended sampling parameters
-            # Note: Qwen3's chat template handles conversation format properly, so we don't need stopping criteria
-            # We rely on max_new_tokens and post-processing safety checks instead
-            with torch.inference_mode():
-                # Qwen3 recommended parameters (no presence_penalty - not supported)
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=optimized_max_tokens,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=0.0,  # Qwen3 recommended
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    repetition_penalty=repetition_penalty,
-                    use_cache=True,
-                    num_beams=1
-                )
+            # Generate tokens using the validated safe token limit
+            generated_tokens = self._generate_tokens(inputs, sampling_params, safe_max_tokens, enable_thinking)
             
-            # Extract ONLY the newly generated tokens (skip the input prompt)
-            input_length = inputs['input_ids'].shape[1]
-            generated_tokens = outputs[0][input_length:].tolist()
-            
-            # Parse thinking content from Qwen3 format (token 151668 = </think>)
-            # When enable_thinking=False, Qwen3 should not generate any thinking tokens at all
-            if enable_thinking:
-                thinking_tokens, content_tokens = split_thinking_tokens(generated_tokens)
-                
-                if thinking_tokens:
-                    thinking_content = self.tokenizer.decode(thinking_tokens, skip_special_tokens=True).strip("\n")
-                else:
-                    thinking_content = ""
-                    logger.debug("No thinking token (151668) found in output")
-                
-                if content_tokens:
-                    final_content = self.tokenizer.decode(content_tokens, skip_special_tokens=True).strip("\n")
-                else:
-                    final_content = ""
-                    logger.debug("No content tokens after thinking block")
-            else:
-                # When thinking is disabled, all tokens are content (no thinking tokens should exist)
-                thinking_content = ""
-                final_content = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip("\n")
-                logger.debug("Thinking mode disabled - all tokens treated as content")
-            
-            raw_response = final_content
+            # Parse thinking and content tokens
+            thinking_content, final_content = self._parse_thinking_tokens(generated_tokens, enable_thinking)
             
             # Debug: Show raw response before post-processing
             logger.debug("\n" + "="*80)
             logger.debug("Raw response from LLM (before post-processing):")
             logger.debug("="*80)
-            logger.debug(repr(raw_response))  # Use repr to show exact characters
+            logger.debug(repr(final_content))
             logger.debug("="*80 + "\n")
             
-            response = raw_response
-            
-            # Safety check: Remove any conversation markers and training artifacts that might have slipped through
-            # Note: We trust Qwen3's official extraction method (token 151668), so we don't truncate
-            # at double newlines as they're often part of valid formatted responses (LaTeX, paragraphs, etc.)
-            
-            # Remove everything after conversation markers (User:, Overseer:, The Overseer:, Assistant:)
-            for marker in ['User:', 'Overseer:', 'The Overseer:', 'Assistant:']:
-                if marker.lower() in response.lower():
-                    # Find the marker (case-insensitive)
-                    pattern = re.compile(re.escape(marker), re.IGNORECASE)
-                    match = pattern.search(response)
-                    if match:
-                        response = response[:match.start()].strip()
-                        logger.debug(f"Removed conversation marker '{marker}' from response (safety check)")
-            
-            # Remove any trailing incomplete sentences or fragments only if they contain conversation markers
-            # This is a safety net for training artifacts, but we preserve valid multi-paragraph responses
-            if response:
-                # Find last complete sentence (ends with . ! ?)
-                last_sentence_end = max(
-                    response.rfind('.'),
-                    response.rfind('!'),
-                    response.rfind('?')
-                )
-                
-                # Only truncate if what comes after looks like training artifacts (contains conversation markers)
-                if last_sentence_end > 0 and last_sentence_end < len(response) - 10:
-                    after_sentence = response[last_sentence_end + 1:].strip().lower()
-                    artifact_keywords = ['user:', 'assistant:', 'overseer:', 'the overseer:']
-                    if any(keyword in after_sentence for keyword in artifact_keywords):
-                        response = response[:last_sentence_end + 1].strip()
-                        logger.debug("Removed trailing content with conversation markers (safety check)")
-            
-            # Preserve paragraph structure - only normalize excessive whitespace (3+ spaces/newlines)
-            # This preserves LaTeX formatting and paragraph breaks while cleaning up artifacts
-            response = re.sub(r'[ \t]{3,}', ' ', response)  # Multiple spaces/tabs -> single space
-            response = re.sub(r'\n{3,}', '\n\n', response)  # 3+ newlines -> double newline
-            response = response.strip()
+            # Post-process response
+            response = self._post_process_response(final_content)
             
             # Debug: Show final processed response
             logger.debug("\n" + "="*80)
@@ -445,19 +573,14 @@ class ObeliskLLM:
             
             logger.debug(f"Generated response: {response[:100]}... ({len(response)} chars)")
             
-            # Fallback if empty
-            if not response or len(response.strip()) < 3:
-                logger.warning(f"Response too short ({len(response)} chars), using fallback")
-                response = "◊ The Overseer processes your query. ◊"
-            
             return {
                 "response": response,
                 "thinking_content": thinking_content,
                 "thinking_mode": enable_thinking,
-                "quantum_influence": quantum_influence,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
+                "quantum_influence": sampling_params["quantum_influence"],  # Use clamped value from sampling_params
+                "temperature": sampling_params["temperature"],
+                "top_p": sampling_params["top_p"],
+                "top_k": sampling_params["top_k"],
                 "source": "obelisk_llm",
                 "model": self.MODEL_NAME
             }
