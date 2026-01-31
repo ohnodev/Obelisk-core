@@ -13,16 +13,19 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich import box
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from pathlib import Path
+import importlib.util
 
-from config import Config
-from src.storage import LocalJSONStorage, SupabaseStorage
-from src.llm.obelisk_llm import ObeliskLLM
-from src.quantum.ibm_quantum_service import IBMQuantumService
+# Import config from root directory (avoids sys.path hack)
+_config_path = Path(__file__).parent.parent.parent / "config.py"
+spec = importlib.util.spec_from_file_location("config", _config_path)
+config_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(config_module)
+Config = config_module.Config
+
+from src.core.bootstrap import get_container
 from src.evolution.processor import process_evolution_cycle
 from src.evolution.training.lora_trainer import LoRATrainer
-from src.memory.memory_manager import ObeliskMemoryManager
 from src.api.server import app
 
 console = Console(force_terminal=True)
@@ -91,18 +94,12 @@ def chat(mode):
     
     # Loading message
     with console.status("[bold cyan]Awakening The Overseer...", spinner="dots"):
-        # Simple approach: no redirection, works the same in both debug and non-debug mode
-        storage = Config.get_storage()
-        llm = ObeliskLLM(storage=storage)
-        memory_manager = ObeliskMemoryManager(
-            storage=storage,
-            llm=llm,
-            mode=Config.MODE
-        )
+        # Build container (cached, so fast on subsequent calls)
+        container = get_container(mode='solo')
         
         # Initialize buffer for CLI user on startup (avoids delay on first message)
         user_id = "cli_user"
-        memory_manager.get_buffer(user_id)  # Initialize buffer and load recent interactions
+        container.memory_manager.get_buffer(user_id)  # Initialize buffer and load recent interactions
     
     console.print("[bold green]✓[/bold green] [bold]The Overseer is ready[/bold]")
     console.print()
@@ -153,10 +150,10 @@ def chat(mode):
             console.print()
             with console.status("[bold cyan]◊ The Overseer is thinking...[/bold cyan]", spinner="dots"):
                 # Get conversation context (includes memory selection - always runs)
-                context = memory_manager.get_conversation_context(user_id, user_query=query)
+                context = container.memory_manager.get_conversation_context(user_id, user_query=query)
                 
                 # Generate response with selected memories
-                result = llm.generate(
+                result = container.llm.generate(
                     query=query,
                     quantum_influence=0.7,
                     conversation_context=context
@@ -205,7 +202,7 @@ def chat(mode):
                 console.print()  # Add blank line after operation completes
             else:
                 # Normal save - fast, no spinner needed
-                memory_manager.add_interaction(
+                container.memory_manager.add_interaction(
                     user_id=user_id,
                     query=query,
                     response=response,
@@ -240,13 +237,12 @@ def evolve(cycle_id, fine_tune):
     click.echo(f"🔄 Processing evolution cycle: {cycle_id}")
     
     try:
-        storage = Config.get_storage()
-        llm = ObeliskLLM(storage=storage)
+        container = get_container(mode=Config.MODE)
         
         result = process_evolution_cycle(
             cycle_id=cycle_id,
-            storage=storage,
-            llm=llm,
+            storage=container.storage,
+            llm=container.llm,
             fine_tune_model=fine_tune
         )
         
@@ -313,23 +309,22 @@ def train(dataset, epochs, learning_rate, batch_size, mode):
         click.echo(f"⚙️  Training parameters: epochs={epochs}, lr={learning_rate}, batch_size={batch_size}")
         click.echo()
         
-        # Initialize storage and LLM
+        # Initialize container
         with console.status("[bold cyan]Initializing model...", spinner="dots"):
-            storage = Config.get_storage()
-            llm = ObeliskLLM(storage=storage)
+            container = get_container(mode=mode)
             
-            if not llm.lora_manager:
+            if not container.llm.lora_manager:
                 click.echo("❌ LoRA manager not initialized")
                 sys.exit(1)
         
         # Create trainer
         trainer = LoRATrainer(
-            model=llm.model,
-            tokenizer=llm.tokenizer,
-            lora_config=llm.lora_config,
-            lora_model=llm.lora_manager.lora_model,
-            device=llm.device,
-            get_system_prompt_fn=llm.get_system_prompt
+            model=container.llm.model,
+            tokenizer=container.llm.tokenizer,
+            lora_config=container.llm.lora_config,
+            lora_model=container.llm.lora_manager.lora_model,
+            device=container.llm.device,
+            get_system_prompt_fn=container.llm.get_system_prompt
         )
         
         # Train
@@ -353,14 +348,14 @@ def train(dataset, epochs, learning_rate, batch_size, mode):
         click.echo()
         
         # Update model references
-        llm.model = trainer.lora_model
-        llm.model.eval()
-        llm.lora_manager.model = llm.model
-        llm.lora_manager.lora_model = trainer.lora_model
+        container.llm.model = trainer.lora_model
+        container.llm.model.eval()
+        container.llm.lora_manager.model = container.llm.model
+        container.llm.lora_manager.lora_model = trainer.lora_model
         
         # Save weights
         click.echo("💾 Saving LoRA weights...")
-        weight_id = llm.lora_manager.save_weights(
+        weight_id = container.llm.lora_manager.save_weights(
             cycle_number=1,  # Use cycle 1 for manual training
             evolution_score=0.0,  # No evolution score for manual training
             interactions_used=len(training_data),
@@ -407,10 +402,9 @@ def test():
     click.echo("🧪 Testing Obelisk LLM...")
     
     try:
-        storage = Config.get_storage()
-        llm = ObeliskLLM(storage=storage)
+        container = get_container(mode=Config.MODE)
         
-        test_result = llm.test()
+        test_result = container.llm.test()
         
         click.echo("")
         click.echo("Test Results:")
@@ -466,8 +460,8 @@ def clear_lora(confirm):
             return
     
     try:
-        storage = Config.get_storage()
-        if storage.delete_lora_weights():
+        container = get_container(mode=Config.MODE)
+        if container.storage.delete_lora_weights():
             click.echo("✅ LoRA weights cleared successfully!")
             click.echo("   The model will use the base model on next startup.")
         else:
