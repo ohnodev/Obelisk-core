@@ -298,8 +298,11 @@ obelisk-core/
 │   ├── evolution/              # Evolution and training module
 │   │   ├── training/           # LoRA fine-tuning
 │   │   │   ├── lora_manager.py # LoRA weight management
-│   │   │   └── lora_trainer.py # LoRA fine-tuning trainer
+│   │   │   ├── lora_trainer.py # LoRA fine-tuning trainer
 │   │   │   └── dataset_example.json  # Example training dataset
+│   │   ├── processor.py        # Evolution cycle processing
+│   │   ├── evaluator.py        # Evolution evaluation
+│   │   └── config.py           # Evolution configuration
 │   ├── memory/                  # Conversation memory management
 │   │   ├── memory_manager.py    # Main memory orchestration
 │   │   ├── recent_buffer.py    # Recent conversation window (last k pairs)
@@ -310,7 +313,6 @@ obelisk-core/
 │   ├── storage/                 # Storage abstraction (local JSON / Supabase)
 │   ├── api/                     # FastAPI server and routes
 │   ├── cli/                     # Command-line interface
-│   ├── evolution/               # Configuration, evaluation, and processing for evolution features
 │   ├── quantum/                 # IBM quantum service integration
 │   └── utils/                   # Utility helpers (JSON parsing, logging)
 ├── config.py                    # Configuration management

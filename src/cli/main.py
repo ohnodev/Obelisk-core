@@ -297,6 +297,11 @@ def train(dataset, epochs, learning_rate, batch_size, mode):
         with open(dataset_path, 'r') as f:
             dataset_data = json.load(f)
         
+        # Validate dataset structure
+        if not isinstance(dataset_data, list):
+            click.echo("❌ Dataset must be a JSON array of {user, assistant} objects")
+            sys.exit(1)
+        
         # Convert to (query, response) tuples
         training_data = [(item['user'], item['assistant']) for item in dataset_data]
         
