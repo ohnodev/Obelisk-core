@@ -446,6 +446,37 @@ def config():
 
 @cli.command()
 @click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
+def clear_lora(confirm):
+    """Clear all LoRA weights (revert to base model)"""
+    if Config.MODE == 'prod':
+        click.echo("❌ Clear LoRA command is only available in solo mode for safety.")
+        click.echo("   Use your database management tools to clear prod data.")
+        sys.exit(1)
+    
+    if not confirm:
+        click.echo("⚠️  This will delete ALL LoRA weights!")
+        click.echo("   The model will revert to the base model.")
+        if not click.confirm("   Are you sure you want to continue?"):
+            click.echo("   Cancelled.")
+            return
+    
+    try:
+        storage = Config.get_storage()
+        if storage.delete_lora_weights():
+            click.echo("✅ LoRA weights cleared successfully!")
+            click.echo("   The model will use the base model on next startup.")
+        else:
+            click.echo("❌ Failed to clear LoRA weights")
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error clearing LoRA weights: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
 def clear(confirm):
     """Clear all local memory and data (fresh start)"""
     if Config.MODE == 'prod':
