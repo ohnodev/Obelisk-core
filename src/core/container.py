@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    # Import concrete types for runtime type checking
     from ..storage.base import StorageInterface
     from ..llm.obelisk_llm import ObeliskLLM
     from ..memory.memory_manager import ObeliskMemoryManager
@@ -19,6 +20,10 @@ class ServiceContainer:
     
     This provides a single source of truth for service instances,
     eliminating duplication between API and CLI initialization.
+    
+    Note: Concrete implementations should conform to the Protocols
+    defined in src.core.types (LLMProtocol, MemoryManagerProtocol, etc.)
+    for better type safety and testability.
     """
     storage: 'StorageInterface'
     llm: 'ObeliskLLM'
